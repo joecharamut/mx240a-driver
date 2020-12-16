@@ -19,7 +19,7 @@ def hex(val):
 def as_bytes(str):
     if isinstance(str, bytes):
         return str
-    return str.encode("ascii")
+    return str.encode("ascii", "replace")
 
 def hexdump(hexarr, end="\n"):
     if isinstance(hexarr[0], str):
@@ -35,7 +35,7 @@ def hexdump(hexarr, end="\n"):
 
     out = ""
     max = len(bytes)
-    out += "(%s %s %s %s %s %s %s %s %s %s %s %s) [%s%s%s%s%s%s%s%s%s%s%s%s]" % (
+    out += "(%s %s %s %s %s %s %s %s) [%s%s%s%s%s%s%s%s]" % (
         "%.2x" % bytes[0] if max > 0 else "..",
         "%.2x" % bytes[1] if max > 1 else "..",
         "%.2x" % bytes[2] if max > 2 else "..",
@@ -44,10 +44,6 @@ def hexdump(hexarr, end="\n"):
         "%.2x" % bytes[5] if max > 5 else "..",
         "%.2x" % bytes[6] if max > 6 else "..",
         "%.2x" % bytes[7] if max > 7 else "..",
-        "%.2x" % bytes[8] if max > 8 else "..",
-        "%.2x" % bytes[9] if max > 9 else "..",
-        "%.2x" % bytes[10] if max > 10 else "..",
-        "%.2x" % bytes[11] if max > 11 else "..",
 
         repr[0] if max > 0 else ".",
         repr[1] if max > 1 else ".",
@@ -57,13 +53,13 @@ def hexdump(hexarr, end="\n"):
         repr[5] if max > 5 else ".",
         repr[6] if max > 6 else ".",
         repr[7] if max > 7 else ".",
-        repr[8] if max > 8 else ".",
-        repr[9] if max > 9 else ".",
-        repr[10] if max > 10 else ".",
-        repr[11] if max > 11 else ".",
     )
     out += end
     return out
+
+def debug(msg: str) -> None:
+    if True:
+        print("[DRIVER ]: {}".format(msg))
 
 class Handset:
     def __init__(self, id, base):
@@ -135,6 +131,8 @@ class MX240a:
         self.handle = None
         self.data_in = None
         self.handsets = {}
+
+        # hooks
         self._on_data_in = None
         self._on_data_out = None
         self._on_im = None
@@ -145,6 +143,8 @@ class MX240a:
         self._on_window_open = None
         self._on_window_close = None
         self._on_disconnect = None
+        self._on_away = None
+
         self.buff_data = None
         self.last_sent = None
 
@@ -162,19 +162,19 @@ class MX240a:
         # new
         handle = self._open()
         if not handle:
-            print("no handle")
+            debug("no handle")
             return
         self.handle = handle
         self.data_in = ""
         if self._init_USB:
             self._init_USB()
 
-    def ACK(self, expect_NAK = False):
+    def ACK(self, expect_NAK: bool = False) -> bool:
         if not self.write(struct.pack("BB", 0xad, 0xff), 1):
-            return
+            return False
         if expect_NAK:
             self.read()
-        return 1
+        return True
 
     def _get_handset(self, num):
         try:
@@ -202,17 +202,19 @@ class MX240a:
         handset = self._get_handset(num)
         if num == "8":
             # init base ACK?
-            self.ACK(1)
+            self.ACK(True)
         elif num == "c" or num == "0":
             # someone's trying to register
             self.write(struct.pack("BB", 0xee, 0xd3)) # reg: we like you!
             # self.write(struct.pack("BB", 0xee, 0xc5)) # reg: ...rejected!
             return 1
         elif num == "f":
-            print("init?")
-        elif num == "1":
-            print("???")
+            debug("init?")
+        elif num == "1" or num == "2":
+            debug(f"unk: num={num}")
+            self.ACK()
         else:
+            debug(f"e other num: {num}")
             self.id_dispatch["f"](num, func, True)
 
     def id_dispatch_f(self, num, func, nak = False):
@@ -223,26 +225,25 @@ class MX240a:
             # ACK?
             if nak:
                 self.write(self.last_sent)
-            #print("FD!!!!!")
-            #print(hex(self.buff_data[0]))
-            if hex(self.buff_data[0]) == 2 or hex(self.buff_data[0] == 1):
-                self.ACK(0)
+            if hex(self.buff_data[0]) == 2 or hex(self.buff_data[0]) == 1:
+                self.ACK()
         elif "69" == func:
-            self.ACK(1)
+            self.ACK(True)
         elif "8c" == func:
             if not self.buff_data[0]:
-                self.ACK(1)
+                self.ACK(True)
             elif hex(self.buff_data[0]) == 0xff:#0xc1:
                 # handset shut down?
                 # testing
                 #exit()
-                #print(f"handset {handset.id} disconnect")
+                #debug(f"handset {handset.id} disconnect")
                 if self._on_disconnect:
                     self._on_disconnect(handset)
             else:
-                self.ACK(1)
+                self.ACK(True)
         elif "8e" == func:
-            print("connect")
+            id_str = "".join([("%#.2x" % hex(c))[2:] for c in self.buff_data])[:-4]
+            debug(f"connect handset id {id_str}")
             if self._on_connect:
                 name, services = self._on_connect(self.handsets[num])
             self._send_name(self.handsets[num], name)
@@ -292,7 +293,10 @@ class MX240a:
             handset._close_window()
             if "f1" == func:
                 # unused if statement?
-                _ = ""
+                debug("noop: 95 f1")
+        elif "9a" == func:
+            # warning?
+            debug("noop: warning")
         elif "b1" == func:
             # YAHOO! username
             handset._set_service("Y")
@@ -305,7 +309,7 @@ class MX240a:
                     break
                 self.read()
             handset._set_username(user)
-            print(f"(H|{handset.id}) sending Yahoo! username: {handset.username}")
+            debug(f"(H|{handset.id}) sending Yahoo! username: {handset.username}")
         elif "b2" == func:
             # YAHOO! password
             _pass = b""
@@ -318,7 +322,7 @@ class MX240a:
                     break
                 self.read()
             handset._set_password(_pass)
-            print(f"(H|{handset.id}) sending Yahoo! pass: {handset.password} | And we're logging in ...")
+            debug(f"(H|{handset.id}) sending Yahoo! pass: {handset.password} | And we're logging in ...")
             id = handset.id
             if self._on_login:
                 self._on_login(handset)
@@ -349,14 +353,14 @@ class MX240a:
         byte_1st = buff_h[0+null]
         byte_2nd = buff_h[1+null]
         self.buff_data = buff_h[2+null:]
-        #print([c for c in byte_1st])
-        #print([c for c in byte_2nd])
+        #debug([c for c in byte_1st])
+        #debug([c for c in byte_2nd])
         if len(self.data_in):
             _, _, _, _, id, num = [c for c in byte_1st]
             _, _, _, _, func_a, func_b = [c for c in byte_2nd]
             func = func_a + func_b
             buff_str = ",".join(["%#.2x" % hex(c) for c in self.buff_data])
-            print(f"id: {id}, func: {func}, buff: ({buff_str})")
+            debug(f"id: {id}, func: {func}, buff: ({buff_str})")
             if has_key(self.id_dispatch, id):
                 self.id_dispatch[id](num, func)
         return 1
@@ -381,11 +385,11 @@ class MX240a:
         four = 0
         while True:
             data_str = b"".join([b"%c" % b for b in self.data_in])
-            print(data_str)
-            print(IM)
+            debug(data_str)
+            debug(IM)
             if match := regex.search(data_str):
                 four = 0
-                print("i1")
+                debug("i1")
                 if len(match.group(2)):
                     IM += match.group(2)
                 if re.search(b"[\xff\xfe]+", data_str) or len(match.group(3)):
@@ -393,55 +397,62 @@ class MX240a:
                 self.read()
             elif match := re.search(b"^(.+)\xff", data_str):
                 four = 0
-                print("i2")
+                debug("i2")
                 IM += match.group(1)
                 break
                 self.read()
             elif match := re.search(b".\xff\xfe?", data_str):
                 four = 0
-                print("i3")
-                self.ACK(0)
+                debug("i3")
+                self.ACK()
                 break
             elif match := re.search(b"([^\xff]+)\xfe", data_str):
                 if not four:
                     IM += match.group(1)
                     four += 1
-                print(f"i4 ({four})")
-                #self.ACK(0)
+                debug(f"i4 ({four})")
+                #self.ACK()
                 self.read()
             else:
                 four = 0
-                print("i5s")
+                debug("i5s")
                 if match := re.search(b"^([^\xff\xfe]*)\xff\xfe?", data_str):
                     if match.group(1):
                         IM += match.group(1)
                     break
                 data_str = re.sub(b"^\0", b"", data_str)
                 IM += data_str
-                #self.ACK(0)
+                #self.ACK()
                 self.read()
                 data_str = b"".join([b"%c" % b for b in self.data_in])
-                print("i5r: " + str([b for b in data_str]))
+                debug("i5r: " + str([b for b in data_str]))
                 if match := re.search(b"^([^\xff\xfe]*)\xff\xfe?", data_str):
                     if match.group(1):
                         IM += match.group(1)
                     break
             #if loops == 3:
-                #print("3 loops break")
+                #debug("3 loops break")
                 #break
             loops += 1
 
         # if no terminator, just end after 3 chunks of 8.
         # if only room for ff in third chunk, put that.
 
-        self.ACK(0)
+        self.ACK()
+
+        # handle away messages
+        if IM[0] == 0x96:
+            if self._on_away:
+                self._on_away(handset, IM[1:])
+                return 1
+
         if self._on_im:
             self._on_im(handset, IM)
         return 1
 
     def _read_open_window(self, handset, buff_data):
         if not handset.service:
-            print("No service")
+            debug("No service")
             handset._range_error()
             return
 
@@ -450,7 +461,7 @@ class MX240a:
         buddy = handset._locate_buddy_by_id(c_im)
         if not buddy:
             return
-        self.ACK(0)
+        self.ACK()
         result = handset._set_window(c_im)
         if self._on_window_open:
             _check = True if buff_data[2] == "fe" else False
@@ -479,7 +490,7 @@ class MX240a:
             status = re.sub(r"A", "U", status)
         elif args["mobile"]:
             status = re.sub(r"N", "Y", status)
-        self.ACK(1) # Some action on the pipe first... just in case...
+        self.ACK(True) # Some action on the pipe first... just in case...
 
         #eNca  >    status 0x01-0x3c     0000  X  set buddy status (status: ANN, AYN, UNN)
         #ANN = (no icon)
@@ -515,7 +526,7 @@ class MX240a:
         #000122  ]>  a1c9 20ff 00         .. ..    # status modifier?
         # flush the pipe
 
-        return self.ACK(1)
+        return self.ACK(True)
 
     def _send_services(self, handset, services):
         i = 0
@@ -538,7 +549,7 @@ class MX240a:
         )
 
     def read(self):
-        #print("read")
+        #debug("read")
         buf = self._read(MX240a.READ_SIZE)
         if len(buf) == 0:
             return 0
@@ -553,12 +564,12 @@ class MX240a:
         if not forget:
             self.last_sent = data
 
-        #print(f"writing {len(data)} bytes")
+        #debug(f"writing {len(data)} bytes")
         sent = 0
         parts = [data[i:i + 8] for i in range(0, len(data), 8)]
         for part in parts:
             part = part.ljust(8, b"\0")
-            part = b"\0" + part
+            # part = b"\0" + part
             sent += self._write(part)
             time.sleep(0.15)
             if self._on_data_out:
@@ -578,11 +589,11 @@ class Base(MX240a):
         try:
             d.open(0x22b8, 0x7f01)
             #d.set_nonblocking(1)
-            print(f"mfr: {d.get_manufacturer_string()}")
-            print(f"prd: {d.get_product_string()}")
-            print(f"ser: {d.get_serial_number_string()}")
+            debug(f"mfr: {d.get_manufacturer_string()}")
+            debug(f"prd: {d.get_product_string()}")
+            debug(f"ser: {d.get_serial_number_string()}")
         except IOError as e:
-            print("Base not connected?")
+            debug("Base not connected?")
             raise
         self._handle = d
         return d
