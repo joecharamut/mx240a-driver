@@ -1,5 +1,7 @@
 source
 __pycache__
 env
+tmp
+data
 
 *.token

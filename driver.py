@@ -144,6 +144,7 @@ class MX240a:
         self._on_window_close = None
         self._on_disconnect = None
         self._on_away = None
+        self._on_warning = None
 
         self.buff_data = None
         self.last_sent = None
@@ -205,8 +206,17 @@ class MX240a:
             self.ACK(True)
         elif num == "c" or num == "0":
             # someone's trying to register
-            self.write(struct.pack("BB", 0xee, 0xd3)) # reg: we like you!
-            # self.write(struct.pack("BB", 0xee, 0xc5)) # reg: ...rejected!
+
+            handset_id = "".join([("%#.2x" % hex(c))[2:] for c in self.buff_data])[:-4]
+            accept = True
+            if self._on_registration:
+                accept = self._on_registration(handset_id)
+
+            if accept:
+                self.write(struct.pack("BB", 0xee, 0xd3)) # reg: we like you!
+            else:
+                self.write(struct.pack("BB", 0xee, 0xc5)) # reg: ...rejected!
+
             return 1
         elif num == "f":
             debug("init?")
@@ -275,15 +285,19 @@ class MX240a:
                 self.read()
             handset._set_password(_pass)
             id = handset.id
+
+            success = True
             if self._on_login:
-                self._on_login(handset)
+                success = self._on_login(handset)
+
+            if success:
                 self.write(struct.pack("BBB", hex("e" + str(id)), 0xd3, 0xff))
                 self.ACK()
                 # XXX - ...should this exist?
                 if self._on_login_complete:
                     self._on_login_complete(handset)
             else:
-                return self.write(struct.pack("BBBB", hex("e" + id), 0xe5, 0x02, 0xff))
+                return self.write(struct.pack("BBBB", hex("e" + str(id)), 0xe5, 0x02, 0xff))
         elif "94" == func:
             # new/newly selected AIM window
             self._read_open_window(handset, self.buff_data)
@@ -295,8 +309,9 @@ class MX240a:
                 # unused if statement?
                 debug("noop: 95 f1")
         elif "9a" == func:
-            # warning?
-            debug("noop: warning")
+            # warn spacebar thing
+            if self._on_warning:
+                self._on_warning(handset)
         elif "b1" == func:
             # YAHOO! username
             handset._set_service("Y")
@@ -324,8 +339,12 @@ class MX240a:
             handset._set_password(_pass)
             debug(f"(H|{handset.id}) sending Yahoo! pass: {handset.password} | And we're logging in ...")
             id = handset.id
+
+            success = True
             if self._on_login:
-                self._on_login(handset)
+                success = self._on_login(handset)
+
+            if success:
                 self.write(struct.pack("BBB", hex("e" + str(id)), 0xd3, 0xff))
                 if self._on_login_complete:
                     self._on_login_complete(handset)
@@ -353,14 +372,14 @@ class MX240a:
         byte_1st = buff_h[0+null]
         byte_2nd = buff_h[1+null]
         self.buff_data = buff_h[2+null:]
-        #debug([c for c in byte_1st])
-        #debug([c for c in byte_2nd])
+        debug([c for c in byte_1st])
+        debug([c for c in byte_2nd])
         if len(self.data_in):
             _, _, _, _, id, num = [c for c in byte_1st]
             _, _, _, _, func_a, func_b = [c for c in byte_2nd]
             func = func_a + func_b
-            buff_str = ",".join(["%#.2x" % hex(c) for c in self.buff_data])
-            debug(f"id: {id}, func: {func}, buff: ({buff_str})")
+            # buff_str = ",".join(["%#.2x" % hex(c) for c in self.buff_data])
+            debug(f"id: {id}, func: {func}, buff: {hexdump(self.buff_data, end='')}")
             if has_key(self.id_dispatch, id):
                 self.id_dispatch[id](num, func)
         return 1
@@ -567,6 +586,7 @@ class MX240a:
         #debug(f"writing {len(data)} bytes")
         sent = 0
         parts = [data[i:i + 8] for i in range(0, len(data), 8)]
+        print(parts)
         for part in parts:
             part = part.ljust(8, b"\0")
             # part = b"\0" + part

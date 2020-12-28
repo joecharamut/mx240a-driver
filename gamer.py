@@ -1,4 +1,4 @@
-from driver import Handset, MX240a, Base
+import driver
 from driver import hexdump
 from discord_interface import DiscordInterface
 from threading import Thread
@@ -12,12 +12,13 @@ def debug(msg: str) -> None:
         print("[MAIN   ]: {}".format(msg))
 
 
-class HandsetInterface:
+class BaseInterface:
     def __init__(self):
-        self.base = Base()
+        self.base = driver.Base()
         self.base._on_im = self.on_im
         self.base._on_connect = self.on_connect
         self.base._on_disconnect = self.on_disconnect
+        self.base._on_registration = self.on_register
         self.base._on_login = self.on_login
         self.base._on_login_complete = self.on_login_complete
         self.base._on_window_open = self.on_window_open
@@ -35,6 +36,12 @@ class HandsetInterface:
         self.on_ready = None
         self.on_close = None
         self.message_queue = asyncio.Queue()
+
+    class HandsetInterface:
+        handset_id: int
+
+        def __init__(self, ID: int) -> None:
+            self.handset_id = ID
 
     async def handset_loop(self):
         try:
@@ -63,6 +70,10 @@ class HandsetInterface:
         self.thread = Thread(target=self.loop.run_forever)
         self.thread.start()
 
+    def on_register(self, handset_id):
+        debug(f"Register: {handset_id}")
+        return True
+
     def on_away(self, handset, message):
         debug(f"Away: {message}")
         self.is_away = True
@@ -89,8 +100,7 @@ class HandsetInterface:
 
     def on_login(self, handset):
         debug(f"Login: {handset.username}:{handset.password} @ {handset.service}")
-        return 1 # okay
-        return 0 # deny
+        return True
 
     def on_login_complete(self, handset):
         self.handset = handset
@@ -346,7 +356,7 @@ class Discord(Program):
 #exit()
 
 if __name__ == "__main__":
-    iface = HandsetInterface()
+    iface = BaseInterface()
     pmgr = ProgramManager(iface)
 
     pmgr.register_program(Echo)

@@ -1,0 +1,121 @@
+cN cd II XX XX XX XX XX ff
+
+ N: handset number
+II: tone id [02..0a]
+XX: tone data
+ff: terminator
+
+tone data [01 7f] = disable tone?
+
+durations: [1, 2, 4, 8, 16, 32] -> 3 bits?
+octaves: [4, 5, 6, 7] -> 2 bits?
+bpm: ? -> ?
+
+notes:
+
+Input:
+Bolero:d=4,o=5,b=80:c6
+Sent Tone Data:
+hex 2e 21
+bin 00101110 00100001
+
+Input:
+:d=5,o=5,b=80:c6
+Sent Tone Data:
+hex 25 21
+bin 00100101 00100001
+
+Input:
+:d=4,o=5,b=100:c
+Sent:
+hex 25 0d
+bin 00100101 00001101
+
+Input:
+:d=32,o=7,b=180:d#,e,g,d#,g,d#,f#,e
+Sent:
+hex 03 30 03 31 03
+bin 00000011 00110000 00000011 00110001 00000011
+
+Input:
+:d=4,o=5,b=112:b.5,g.5
+Sent Tone Data:
+hex 31 20 31 14
+bin 00110001 00100000 00110001 00010100
+
+:d=4,o=5,b=100:N
+hex 25 XX
+N: XX
+c4 : 01
+c4#: 02
+d4 : 03
+d4#: 04
+e4 : 05
+e4#: invalid
+f4 : 06
+f4#: 07
+g4 : 08
+g4#: 09
+a4 : 0a
+a4#: 0b
+b4 : 0c
+c5 : 0d
+c5#: 0e
+d5 : 0f
+d5#: 10
+e5 : 11
+e5#: invalid
+f5 : 12
+f5#: 13
+g5 : 14
+g5#: 15
+a5 : 16
+a5#: 17
+???: [18-1f]
+b5 : 20
+b5#: invalid
+c6 : 21
+c6#: 22
+d6 : 23
+d6#: 24
+e6 : 25
+e6#: invalid
+f6 : 26
+f6#: 27
+g6 : 28
+g6#: 29
+a6 : 2a
+a6#: 2b
+b6 : 2c
+b6#: invalid
+c7 : 2d
+c7#: 2e
+d7 : 2f
+d7#: 30
+e7 : 31
+e7#: invalid
+f7 : 32
+f7#: 33
+g7 : 34
+g7#: 35
+a7 : 36
+a7#: 37
+b7 : 38
+b7#: invalid
+
+
+rest: 7f
+
+d=1,b=100 -> 92 xx (146)2400ms/16 = 150 != 146
+d=2,b=100 -> 49 xx (73) 1200ms/16 = 75 != 73
+d=4,b=100 -> 25 xx (37) 600ms /16 ~= 37
+d=8,b=100 -> 12 xx (18) 300ms /16 ~= 18
+d=16,b=100 -> 09 xx (9) 150ms /16 ~= 9
+d=32,b=100 -> 05 xx (5) 38ms /16 ~= 2
+d=32,b=900 -> 01 xx (1) 8ms /16 ~= 1
+(disabled) -> 01 7f (1)
+
+Input:
+:d=4,o=5,b=100:c,d,e,f,g
+Sent:
+hex 25 0d 25 0f 25 11 25 12 25 14
