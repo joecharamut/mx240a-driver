@@ -3,13 +3,27 @@ import re
 import sys
 from enum import Enum
 from queue import Queue
-from threading import Thread
+from threading import Thread, Lock
 import time
 from typing import Union, List, Optional, Any, Callable, Dict
-from multiprocessing import Lock
 
 # noinspection PyPep8Naming
 from hid import device as HIDDevice
+from loguru import logger
+
+
+def set_log_level(level: str) -> None:
+    logger.remove()
+    if level == "TRACE" or level == "DEBUG":
+        logger.add(sys.stdout, level=level, format="[{elapsed}] [{level}] {message}",
+                   backtrace=True, diagnose=True, enqueue=True)
+    else:
+        logger.add(sys.stdout, level=level, format="[{time:HH:mm:ss}] [{level}] {message}",
+                   backtrace=True, diagnose=True, enqueue=True)
+
+
+# default info level
+set_log_level("INFO")
 
 
 def as_bytes(data: Union[str, bytes]) -> bytes:
@@ -57,30 +71,6 @@ def hexdump(data: Union[List[str], List[int], bytes], show_binary: bool = False)
         output += " {%s}" % " ".join(binary_data)
 
     return output
-
-
-LOG_LOCK = Lock()
-DEBUG_LOG_ENABLED = True
-VERBOSE_LOG_ENABLED = False
-
-
-def log(msg: str, name: str) -> None:
-    with LOG_LOCK:
-        print(f"[{name.ljust(7)}]: {msg}")
-
-
-def warn(msg: str) -> None:
-    log(msg, "WARN")
-
-
-def debug(msg: Any) -> None:
-    if DEBUG_LOG_ENABLED:
-        log(f"{msg if isinstance(msg, str) else msg.__repr__()}", "DEBUG")
-
-
-def verbose(msg: Any) -> None:
-    if VERBOSE_LOG_ENABLED:
-        log(f"{msg if isinstance(msg, str) else msg.__repr__()}", "VERBOSE")
 
 
 class Ringtone:
@@ -142,7 +132,7 @@ class Ringtone:
     def __init__(self, tone_data: str) -> None:
         self.tone_data = tone_data
 
-        verbose(f"RTTTL Input \"{tone_data}\"")
+        logger.trace(f"RTTTL Input \"{tone_data}\"")
         duration = 4
         octave = 4
         bpm = 120
@@ -170,7 +160,7 @@ class Ringtone:
             elif parts[0] == "b":
                 bpm = int(parts[1])
 
-        verbose(f"RTTTL: \"{name}\" (Note Duration: {duration}, Octave: {octave}, BPM: {bpm}) Notes: {notes}")
+        logger.trace(f"RTTTL: \"{name}\" (Note Duration: {duration}, Octave: {octave}, BPM: {bpm}) Notes: {notes}")
         self.name = name
 
         output_bytes = bytearray()
@@ -190,10 +180,10 @@ class Ringtone:
             if full_note not in Ringtone.NOTE_TO_HEX and note != "p":
                 raise ValueError("Invalid RTTTL Data (Invalid note)")
             elif note == "p":
-                warn("RTTTL WARNING: Pauses do not work correctly on the handset")
+                logger.warning("RTTTL WARNING: Pauses do not work correctly on the handset")
             output_bytes.append(0x7f if note == "p" else Ringtone.NOTE_TO_HEX[full_note])
 
-        verbose(f"RTTTL Output {hexdump(output_bytes)}")
+        logger.trace(f"RTTTL Output {hexdump(output_bytes)}")
 
         self.tone_bytes = bytes(output_bytes)
 
@@ -220,6 +210,39 @@ class Buddy:
         self.mobile = False
 
 
+class Window:
+    handset: "Handset"
+    window_id: int
+
+    def __init__(self, handset: "Handset", window_id: int) -> None:
+        self.handset = handset
+        self.window_id = window_id
+
+    def send_message(self, message: str) -> None:
+        # first msg packet requires leading null
+        msg_bytes = [0x00, *as_bytes(message)]
+        msg_parts = [msg_bytes[i:i + 21] for i in range(0, len(msg_bytes), 21)]
+        if len(msg_parts[-1]) == 21:
+            # and some more padding for the last 0xff, just in case
+            msg_parts.append([])
+
+        for i, part in enumerate(msg_parts):
+            to_send = bytearray()
+            to_send.append(int(f"8{self.handset.num}", 16))
+            to_send.append(self.window_id)
+            for byte in part:
+                to_send.append(byte)
+            if i == len(msg_parts) - 1:
+                to_send.append(0xff)
+
+            # max 24 bytes
+            assert len(to_send) <= 24
+            self.handset.base.write(bytes(to_send))
+            self.handset.base.ack()
+        self.handset.base.write(bytes([int(f"e{self.handset.num}", 16), 0xce, self.window_id]))
+        self.handset.base.ack()
+
+
 class Handset:
     base: "BaseStation"
     num: int
@@ -228,8 +251,11 @@ class Handset:
     username: Optional[str]
     password: Optional[str]
     buddy_list: Dict[str, List[Optional[Buddy]]]
+    windows: Dict[int, Window]
 
     message_callback = Optional[Callable[[str], None]]
+    window_open_callback = Optional[Callable[[Window], None]]
+    window_close_callback = Optional[Callable[[Window], None]]
 
     def __init__(self, base: "BaseStation", handset_num: int, handset_id: str) -> None:
         self.base = base
@@ -243,12 +269,23 @@ class Handset:
         self.password = None
 
         self.buddy_list = {}
+        self.windows = {}
 
         self.message_callback = None
+        self.window_open_callback = None
+        self.window_close_callback = None
 
-    def send_message(self, window: int, message: str) -> None:
-        self.base.write(bytes([int(f"8{self.num}", 16), window, *as_bytes(message), 0xff]))
-        self.base.write(bytes([int(f"e{self.num}", 16), 0xce, window]))
+    def open_window(self, window_id: int) -> None:
+        self.windows[window_id] = window = Window(self, window_id)
+        if self.window_open_callback:
+            self.window_open_callback(window)
+
+    def close_window(self, window_id: int) -> None:
+        if window_id in self.windows:
+            window = self.windows[window_id]
+            del self.windows[window_id]
+            if self.window_close_callback:
+                self.window_close_callback(window)
 
     def add_buddy(self, buddy: Buddy, group: str) -> None:
         group = group[0:6].ljust(6, " ")
@@ -271,15 +308,110 @@ class Handset:
         self.base.ack()
 
 
+class PacketType(Enum):
+    Unknown = 0x00
+    Message = 0x01
+    MessageContinuation = 0x02
+    HandsetRegistration = 0x03
+    MysteryACK = 0x04
+    BaseInitACK = 0x05
+    BaseInitReply = 0x06
+    HandsetDisconnected = 0x07
+    HandsetConnecting = 0x08
+    HandsetUsername = 0x09
+    HandsetPassword = 0x0a
+    ACK = 0x0b
+    OpenWindow = 0x0c
+    CloseWindow = 0x0d
+    HandsetAway = 0x0e
+    HandsetWarning = 0x0f
+    HandsetInvite = 0x10
+
+
+class Packet:
+    packet_type: PacketType
+    _packet_data: bytearray
+
+    def __init__(self, packet_type: PacketType) -> None:
+        self.packet_type = packet_type
+        self._packet_data = bytearray()
+
+    @staticmethod
+    def detect_type(byte_1: int, byte_2: int) -> PacketType:
+        byte_1_hi = (byte_1 & 0xf0) >> 4
+
+        if byte_1 == 0xe0:
+            return PacketType.HandsetRegistration
+        elif (byte_1 == 0xe1 or byte_1 == 0xe2) and byte_2 == 0xfd:
+            return PacketType.MysteryACK
+        elif byte_1 == 0xe8:
+            return PacketType.BaseInitACK
+        elif byte_1 == 0xef:
+            return PacketType.BaseInitReply
+        elif byte_1_hi == 0xf or byte_1_hi == 0xe:
+            if byte_2 == 0xfd:
+                return PacketType.ACK
+            elif byte_2 == 0x69:
+                ...
+            elif byte_2 == 0x8c:
+                return PacketType.HandsetDisconnected
+            elif byte_2 == 0x8e:
+                return PacketType.HandsetConnecting
+            elif byte_2 == 0x91:
+                return PacketType.HandsetUsername
+            elif byte_2 == 0x92:
+                return PacketType.HandsetPassword
+            elif byte_2 == 0x93:
+                return PacketType.HandsetDisconnected  # Logoff menu selection
+            elif byte_2 == 0x94:
+                return PacketType.OpenWindow
+            elif byte_2 == 0x95:
+                return PacketType.CloseWindow
+            elif byte_2 == 0x96:
+                return PacketType.HandsetAway
+            elif byte_2 == 0x9a:
+                return PacketType.HandsetWarning
+            elif byte_2 == 0x9b:
+                return PacketType.HandsetInvite
+            else:
+                return PacketType.Message
+        elif byte_1_hi == 0xa or byte_1_hi == 0xd or byte_1_hi == 0x8:
+            return PacketType.Message
+
+        return PacketType.Unknown
+
+    def append_data(self, data: bytes) -> None:
+        for b in data:
+            self._packet_data.append(b)
+
+    def bytes(self) -> bytes:
+        return bytes(self._packet_data)
+
+    def handset_num(self) -> int:
+        return int(to_hex(self._packet_data[0])[1], 16)
+
+    def __repr__(self) -> str:
+        return f"<Packet type: {self.packet_type} data: {hexdump(self.bytes())}>"
+
+
 class BaseStation:
     device: Optional[HIDDevice]
 
     read_thread: Thread
-    read_semaphore: bool
+    read_loop_flag: bool
     read_buffer: Queue
 
+    decode_thread: Thread
+    decode_loop_flag: bool
+    decoded_packet_buffer: Queue
+
     process_thread: Thread
-    process_semaphore: bool
+    process_loop_flag: bool
+
+    write_thread: Thread
+    write_loop_flag: bool
+    write_lock: Lock
+    write_buffer: Queue
 
     last_write: bytes
 
@@ -298,11 +430,20 @@ class BaseStation:
         self.device = None
 
         self.read_thread = Thread(target=self.read_loop)
-        self.read_semaphore = False
+        self.read_loop_flag = False
         self.read_buffer = Queue()
 
+        self.decode_thread = Thread(target=self.decode_loop)
+        self.decode_loop_flag = False
+        self.decoded_packet_buffer = Queue()
+
         self.process_thread = Thread(target=self.process_loop)
-        self.process_semaphore = False
+        self.process_loop_flag = False
+
+        self.write_thread = Thread(target=self.write_loop)
+        self.write_loop_flag = False
+        self.write_lock = Lock()
+        self.write_buffer = Queue()
 
         self.last_write = b""
 
@@ -318,32 +459,41 @@ class BaseStation:
         self.away_callback = None
 
     def open(self) -> None:
+        logger.debug("Opening device...")
+        self.device = device = HIDDevice()
         try:
-            debug("Opening device...")
-            self.device = device = HIDDevice()
             device.open(0x22b8, 0x7f01)
-            debug(f"mfr: {device.get_manufacturer_string()}")
-            debug(f"prd: {device.get_product_string()}")
-            debug(f"ser: {to_hex(device.get_serial_number_string().encode())}")
-
-            self.read_thread.start()
-
-            debug("Initializing...")
-            self.write(b"\xad\xef\x8d\xff")
-
-            buf = self.read(timeout=0.5)
-            if buf == b"":
-                debug("Init reply skipped for some reason?")
-            elif buf[0:2] == b"\xef\x01":
-                debug(f"Init reply: {hexdump(buf[2:])}")
-            else:
-                debug("Reading real data uh oh")
-
-            debug("Init complete?")
-            self.process_thread.start()
+            mfr = device.get_manufacturer_string()
+            prd = device.get_product_string()
+            ser = device.get_serial_number_string().encode()
+            if mfr != "Giant Wireless Technology" or prd != "MX240a MOTOROLA MESSENGER" or ser != b"\xd0\x89":
+                raise IOError()
         except IOError:
-            print("Failed to open base")
-            sys.exit(1)
+            logger.error("Error opening device")
+            exit(1)
+
+        logger.trace(f"mfr: {device.get_manufacturer_string()}")
+        logger.trace(f"prd: {device.get_product_string()}")
+        logger.trace(f"ser: {to_hex(device.get_serial_number_string().encode())}")
+
+        self.read_thread.start()
+        self.write_thread.start()
+
+        logger.debug("Initializing...")
+        self._write(b"\xad\xef\x8d\xff")
+
+        buf = self.read(timeout=0.5)
+        if buf == b"":
+            logger.trace("Init reply skipped for some reason?")
+        elif buf[0:2] == b"\xef\x01":
+            logger.trace(f"Init reply: {hexdump(buf[2:])}")
+        else:
+            logger.warning("Reading real data, you might want to restart the driver")
+
+        logger.debug("Init complete")
+
+        self.decode_thread.start()
+        self.process_thread.start()
 
     def read(self, blocking: bool = True, timeout: Optional[float] = None) -> bytes:
         if self.read_buffer.empty() and not blocking:
@@ -354,11 +504,13 @@ class BaseStation:
         except queue.Empty:
             return b""
 
-    def write(self, data: bytes, ack: bool = False) -> int:
+    def write(self, data: bytes, ack: bool = False) -> None:
         if not ack:
             self.last_write = data
 
-        # split into octets
+        self.write_buffer.put(data)
+
+    def _write(self, data: bytes) -> None:
         parts = [
             # pad to 8 bytes
             data[i:i + 8].ljust(8, b"\0")
@@ -366,130 +518,130 @@ class BaseStation:
         ]
 
         # write and count amount written
-        sent = 0
-        for octet in parts:
-            verbose(f"[SEND] {hexdump(octet)}")
-            sent += self.device.write(octet)
+        for part in parts:
+            logger.trace(f"[SEND] {hexdump(part)}")
+            self.device.write(part)
             time.sleep(0.15)
 
-        return sent
-
     def read_loop(self) -> None:
-        debug("Starting read thread")
-        while not self.read_semaphore:
+        logger.debug("Starting read thread")
+        while not self.read_loop_flag:
             try:
                 # read 16 bytes
                 data = bytes(self.device.read(16))
                 if len(data):
-                    verbose(f"[RECV] {hexdump(data)}")
+                    logger.trace(f"[RECV] {hexdump(data)}")
                     self.read_buffer.put(data)
             except OSError:
                 # catch error on close()
                 pass
-        debug("Exiting read thread")
+        logger.debug("Exiting read thread")
+
+    def write_loop(self) -> None:
+        logger.debug("Starting write thread")
+        while not self.write_loop_flag:
+            data = self.write_buffer.get()
+
+            if data == b"":
+                continue
+
+            self._write(data)
+
+        logger.debug("Exiting write thread")
 
     def close(self) -> None:
-        # put some nulls to clear out any blocking reads
-        for _ in range(16):
-            self.read_buffer.put(b"")
-
         if self.process_thread.is_alive():
-            self.process_semaphore = True
+            for _ in range(16):
+                self.decoded_packet_buffer.put(Packet(PacketType.Unknown))
+
+            self.process_loop_flag = True
             self.process_thread.join()
 
+        if self.decode_thread.is_alive():
+            for _ in range(16):
+                self.read_buffer.put(b"")
+
+            self.decode_loop_flag = True
+            self.decode_thread.join()
+
         if self.read_thread.is_alive():
-            self.read_semaphore = True
+            self.read_loop_flag = True
             self.read_thread.join()
 
-        debug("Closing Device")
-        self.device.close()
-        debug("Bye!")
+        if self.write_thread.is_alive():
+            for _ in range(16):
+                self.write_buffer.put(b"")
 
-    def process_loop(self) -> None:
-        debug("Starting process thread")
-        while not self.process_semaphore:
+            self.write_loop_flag = True
+            self.write_thread.join()
+
+        logger.debug("Closing Device")
+        self.device.close()
+        logger.debug("Bye!")
+
+    def decode_loop(self) -> None:
+        logger.debug("Starting decode thread")
+
+        packet_in_progress = None
+
+        while not self.decode_loop_flag:
             data = self.read()
 
             if data == b"":
                 continue
 
-            command, handset_num = to_hex(data[0])
-            function = to_hex(data[1])
-            extra = data[2:]
-            verbose(f"Command: {command}, Handset Num: {handset_num}, Function: {function}, Extra: {hexdump(extra)}")
+            # start of new packet
+            if data[0] & 0x80 and data[0] != 0xff and data[0] != 0xfe:
+                logger.trace(hexdump(data, True))
+                packet_type = Packet.detect_type(data[0], data[1])
+                logger.trace("Packet type: {}", packet_type)
+                if packet_type == PacketType.Unknown:
+                    raise ValueError(f"Unknown Packet {hexdump(data)}")
+                packet_in_progress = Packet(packet_type)
+                packet_in_progress.append_data(data)
 
-            if command == "a" or command == "d" or command == "8":
-                self.read_message(self.handsets[int(handset_num)], data)
-            elif command == "c":
-                debug(f"Command c (NAK?)")
-            elif command == "e" or command == "f":
-                if not self.handle_function(command, handset_num, function, extra):
-                    self.read_message(self.handsets[int(handset_num)], data)
+                if 0xff in data:
+                    self.decoded_packet_buffer.put(packet_in_progress)
+                    logger.trace("Packet: {}", packet_in_progress)
+                    packet_in_progress = None
             else:
-                debug(f"Unknown command: {command}")
-
-        debug("Exiting process thread")
-
-    def handle_function(self, command: str, handset_num: str, function: str, extra: bytes) -> bool:
-        nak = False
-        if command == "e":
-            if handset_num == "0" or handset_num == "c":
-                # reg new handset
-                handset_id = "".join([to_hex(n) for n in extra[0:4]])
-                debug(f"Registration req handset ID: {handset_id}")
-
-                result = True
-                if self.register_callback:
-                    result = self.register_callback(handset_id)
-
-                if result:
-                    # accepted
-                    self.write(b"\xee\xd3")
+                if not packet_in_progress:
+                    logger.warning("Cannot append data to nonexistent packet")
                 else:
-                    # rejected
-                    self.write(b"\xee\xc5")
-                self.ack()
-                return True
-            elif handset_num == "1" or handset_num == "2":
-                # mystery function
-                self.ack()
-                return True
-            elif handset_num == "8":
-                # "init base ack?"
-                self.ack(True)
-                return True
-            elif handset_num == "f":
-                debug("Base init reply")
-                return True
-            else:
-                debug(f"e gives up")
-                command = "f"
-                nak = True
+                    packet_in_progress.append_data(data)
+                    if 0xff in data or 0xfe in data:
+                        self.decoded_packet_buffer.put(packet_in_progress)
+                        logger.trace("Packet: {}", packet_in_progress)
+                        packet_in_progress = None
 
-        if command == "f":
-            if function == "fd":
-                # ACK?
-                if nak:
-                    self.write(self.last_write)
-                if extra[0] == 1 or extra[0] == 2:
-                    self.ack()
-                return True
-            elif function == "69":
-                self.ack(True)
-                return True
-            elif function == "8c":
-                if extra[0] == 0xff or extra[0] == 0xc1:
-                    if self.disconnect_callback:
-                        self.disconnect_callback(self.handsets[int(handset_num)])
-                    self.handsets[int(handset_num)] = None
-                    debug(f"Handset {handset_num} disconnected")
-                else:
-                    self.ack(True)
-                return True
-            elif function == "8e":
-                handset_id = "".join([to_hex(n) for n in extra[0:4]])
-                debug(f"Handset connecting, ID: {handset_id}")
-                self.handsets[int(handset_num)] = handset = Handset(self, int(handset_num), handset_id)
+        logger.debug("Exiting decode thread")
+
+    def process_loop(self) -> None:
+        logger.debug("Starting process thread")
+        while not self.process_loop_flag:
+            packet = self.decoded_packet_buffer.get()
+
+            if packet.packet_type == PacketType.Unknown:
+                continue
+
+            if packet.packet_type == PacketType.Message or packet.packet_type == PacketType.MessageContinuation:
+                num = packet.handset_num()
+                logger.trace(num)
+                handset = self.handsets[num]
+                message = self.read_string(packet)
+
+                if message:
+                    logger.debug(f"Message: {message}")
+                    if handset and handset.message_callback:
+                        handset.message_callback(message)
+            elif packet.packet_type == PacketType.ACK or packet.packet_type == PacketType.MysteryACK:
+                self.ack()
+            elif packet.packet_type == PacketType.HandsetConnecting:
+                handset_id = "".join([to_hex(n) for n in packet.bytes()[2:][0:4]])
+                handset_num = packet.handset_num()
+                logger.debug(f"Handset connecting, ID: {handset_id}")
+                self.handsets[handset_num] = Handset(self, handset_num, handset_id)
+                handset = self.handsets[handset_num]
 
                 name = "IMFree"
                 connect_data = None
@@ -500,11 +652,13 @@ class BaseStation:
                     name = connect_data["name"]
 
                 handset.name = name
-                self.write(bytes([int(handset_num), 0xd9, *as_bytes(name), 0xff]))
+                self.write(bytes([handset_num, 0xd9, *as_bytes(name), 0xff]))
                 self.write(bytes([int(f"e{handset_num}", 16), 0xd7, *as_bytes(" AIM  "), 0xff]))
 
                 # noinspection SpellCheckingInspection
                 tones: Dict[str, Optional[Ringtone]] = {
+                    # Copied all these ringtones from the original MX240a driver
+                    # (including the names (no i dont know why its called bulletme (also these are really annoying)))
                     "newMessage": Ringtone("Dang:d=4,o=5,b=140:16g#5,16e5,16c#5"),  # aol-imrcv.txt
                     "contactOnline": Ringtone("Rikasmiesjos:d=4,o=5,b=100:32b,32d6,32g6,32g6"),  # aol_ring.txt
                     "contactOffline": Ringtone("Bolero:d=4,o=5,b=80:c6"),  # bolero.txt
@@ -545,6 +699,7 @@ class BaseStation:
                         if tone:
                             tone_bytes = tone.tone_bytes
                         else:
+                            # yeah the "mute tone" function just plays a very short rest, i guess that works
                             tone_bytes = b"\x01\x7f"
                         tone_parts = [tone_bytes[i:i + 20] for i in range(0, len(tone_bytes), 20)]
 
@@ -554,16 +709,20 @@ class BaseStation:
                             for part in tone_parts:
                                 self.write(bytes([int(f"8{handset_num}", 16), 0xcd, tone_id, *part, 0xff]))
                                 self.ack()
-                return True
-            elif function == "91":
-                username = self.read_string(extra)
-                debug(f"Handset username: {username}")
-                self.handsets[int(handset_num)].username = username
-                return True
-            elif function == "92":
-                password = self.read_string(extra)
-                debug(f"Handset password: {password}")
-                handset = self.handsets[int(handset_num)]
+            elif packet.packet_type == PacketType.HandsetDisconnected:
+                handset = self.handsets[packet.handset_num()]
+                logger.debug("Handset disconnect: num {}", handset.num)
+                if self.disconnect_callback:
+                    self.disconnect_callback(handset)
+            elif packet.packet_type == PacketType.HandsetUsername:
+                username = self.read_string(packet)
+                logger.debug(f"Handset username: {username}")
+                self.handsets[packet.handset_num()].username = username
+            elif packet.packet_type == PacketType.HandsetPassword:
+                password = self.read_string(packet)
+                handset_num = packet.handset_num()
+                logger.debug(f"Handset password: {password}")
+                handset = self.handsets[handset_num]
                 handset.password = password
 
                 result = True
@@ -573,70 +732,61 @@ class BaseStation:
                 if result:
                     self.write(bytes([int(f"e{handset_num}", 16), 0xd3, 0xff]))
                     self.ack()
-                    debug("Login success")
+                    logger.debug("Login success")
 
                     if self.post_login_callback:
                         self.post_login_callback(handset)
                 else:
                     self.write(bytes([int(f"e{handset_num}", 16), 0xe5, 0x02, 0xff]))
-                    debug("Login failed")
-                return True
-            elif function == "93":
-                debug("todo: fN 93")
-                return True
-            elif function == "94":
-                debug("todo: fN 94")
-                return True
-            elif function == "95":
-                debug("todo: fN 95")
-                return True
-            elif function == "96":
-                away = self.read_string(extra)
+                    logger.debug("Login failed")
+            elif packet.packet_type == PacketType.OpenWindow:
+                handset = self.handsets[packet.handset_num()]
+                window_id = packet.bytes()[2]
+                logger.debug("Window Open: id {}", window_id)
+                handset.open_window(window_id)
+            elif packet.packet_type == PacketType.CloseWindow:
+                handset = self.handsets[packet.handset_num()]
+                window_id = packet.bytes()[2]
+                logger.debug("Window Close: id {}", window_id)
+                handset.close_window(window_id)
+            elif packet.packet_type == PacketType.HandsetAway:
+                away = self.read_string(packet)
                 self.ack()
-                debug(f"Away message: {away}")
+                logger.debug(f"Away message: {away}")
                 if self.away_callback:
                     self.away_callback(away)
-                return True
-            elif function == "9a":
-                debug("todo: fN 9a (warn)")
-                return True
-            elif function == "9b":
-                debug("todo: fN 9b (invite)")
-                return True
-            return False
+            elif packet.packet_type == PacketType.HandsetWarning:
+                ...
+            elif packet.packet_type == PacketType.HandsetInvite:
+                ...
+            else:
+                logger.warning("Unknown Packet: {}", hexdump(packet.bytes()))
 
-    def read_message(self, handset: Optional[Handset], extra: bytes):
-        skip = 1
-        message = self.read_string(extra, skip)
-        if handset and handset.message_callback:
-            handset.message_callback(message)
-        debug(f"Message: {message}")
+        logger.debug("Exiting process thread")
 
-    def read_string(self, initial_buffer: bytes, skip: int = 2) -> str:
-        string = bytearray()
-        buffer = initial_buffer.rjust(8, b"\0")
-        i = skip
-        while (byte := buffer[i]) != 0xff:
-            if byte == 0xfe:
-                self.ack()
+    def read_string(self, packet: Packet) -> Optional[str]:
+        if not self.string_buffer:
+            self.string_buffer = bytearray()
+        buffer = packet.bytes()
+        finished = False
+
+        for byte in buffer:
             if byte == 0xff:
+                finished = True
                 break
             elif 32 <= byte <= 127:
-                string.append(byte)
+                self.string_buffer.append(byte)
 
-            i += 1
-            if i >= 8:
-                i = 0
-                buffer = self.read(timeout=0.25)
-                if not buffer:
-                    self.ack()
-                    buffer = self.read()
         self.ack()
-        return string.decode()
+        logger.trace("Partial Message: " + self.string_buffer.decode())
 
-    def ack(self, expect_reply: bool = False) -> bool:
-        if not self.write(b"\xad\xff", True):
-            return False
+        if finished:
+            string = self.string_buffer.decode()
+            self.string_buffer = None
+            return string
+        return None
+
+    def ack(self, expect_reply: bool = False) -> None:
+        self.write(b"\xad\xff", True)
         if expect_reply:
-            debug("NAK: " + hexdump(self.read()))
-        return True
+            logger.debug("NAK: " + hexdump(self.read()))

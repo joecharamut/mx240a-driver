@@ -1,13 +1,16 @@
+import sys
 from typing import List, Tuple, Optional, Callable
-import discord
-import asyncio
 from threading import Thread
 from queue import Queue
 
+import discord
+import asyncio
+from loguru import logger
 
-def debug(msg: str) -> None:
-    if True:
-        print("[DISCORD]: {}".format(msg))
+
+logger.remove()
+logger.add(sys.stdout, level="DEBUG", format="[{time:HH:mm:ss}] [{level}] {message}",
+           backtrace=True, diagnose=True, enqueue=True)
 
 
 class DiscordInterface:
@@ -16,11 +19,13 @@ class DiscordInterface:
 
     selected_server: Optional[discord.Guild]
     selected_channel: Optional[discord.TextChannel]
-    message_handler: Callable[[discord.Message], None]
+
+    ready_callback: Optional[Callable[[], None]]
+    message_callback: Optional[Callable[[discord.Message], None]]
 
     send_queue: Queue
 
-    def __init__(self, ready_callback: Callable, message_handler: Callable[[discord.Message], None]) -> None:
+    def __init__(self) -> None:
         self.client = discord.Client()
         self.client_thread = None
         self.client_ready = False
@@ -28,39 +33,39 @@ class DiscordInterface:
         self.selected_server = None
         self.selected_channel = None
 
-        self.ready_callback = ready_callback
-        self.message_handler = message_handler
+        self.ready_callback = None
+        self.message_callback = None
 
         self.send_queue = Queue()
-        self.event_loop = asyncio.new_event_loop()
+        self.event_loop = asyncio.get_event_loop()
 
         self.client.event(self.on_message)
         self.client.event(self.on_ready)
 
-    def init(self) -> None:
-        asyncio.set_event_loop(self.event_loop)
-        with open("self.token") as f:
-            self.event_loop.create_task(self.client.start(f.read().strip(), bot=False))
+    def init(self, token: str) -> None:
+        # asyncio.set_event_loop(self.event_loop)
+        self.event_loop.create_task(self.client.start(token, bot=False))
         self.event_loop.create_task(self.send_loop_func())
 
         self.client_thread = Thread(target=self.event_loop.run_forever)
         self.client_thread.start()
 
-        print("Logging in...")
+        logger.debug("Logging in to discord...")
 
     async def on_message(self, message: discord.Message):
         if message.author == self.client.user:
             return
 
-        if self.selected_server and self.selected_channel:
-            if message.channel == self.selected_channel:
-                self.message_handler(message)
-                debug("{} #{} <{}>: {}".format(message.guild, message.channel, message.author, message.clean_content))
+        if self.selected_server and self.selected_channel and message.channel == self.selected_channel:
+            if self.message_callback:
+                self.message_callback(message)
+            logger.debug("{} #{} <{}>: {}", message.guild, message.channel, message.author, message.clean_content)
 
     async def on_ready(self) -> None:
         self.client_ready = True
-        self.ready_callback()
-        debug("Discord bot logged in as: {} ({})".format(self.client.user.name, self.client.user.id))
+        logger.debug("Discord bot logged in as: {} ({})".format(self.client.user.name, self.client.user.id))
+        if self.ready_callback:
+            self.ready_callback()
 
     async def send_loop_func(self) -> None:
         while True:
@@ -72,15 +77,16 @@ class DiscordInterface:
 
     def close(self) -> None:
         asyncio.get_event_loop().create_task(self.client.close())
-        self.client_thread.join()
-        debug("Exiting...")
+        if self.client_thread:
+            self.client_thread.join()
+        logger.debug("Exiting discord...")
 
     def get_servers(self) -> List[Tuple[int, str]]:
         servers = [(0, "DM")]
         for i, server in enumerate(self.client.guilds):
             servers.append((i+1, server.name))
 
-        debug("Available servers: " + servers.__repr__())
+        logger.debug("Available servers: " + servers.__repr__())
         return servers
 
     def get_channels(self) -> Optional[List[Tuple[int, str]]]:
@@ -91,13 +97,13 @@ class DiscordInterface:
         for i, channel in enumerate([c for c in self.selected_server.channels if c.type is discord.ChannelType.text]):
             channels.append((i, "#"+channel.name))
 
-        debug("Channels in server: " + channels.__repr__())
+        logger.debug("Channels in server: " + channels.__repr__())
         return channels
 
     def select_server(self, index: int) -> bool:
         try:
             self.selected_server = self.client.guilds[index-1]
-            debug("Selected server " + self.selected_server.name)
+            logger.debug("Selected server " + self.selected_server.name)
         except KeyError:
             return False
         return True
@@ -108,7 +114,7 @@ class DiscordInterface:
         try:
             self.selected_channel = [c for c in self.selected_server.channels
                                      if c.type is discord.ChannelType.text][index]
-            debug("Selected channel " + self.selected_channel.name)
+            logger.debug("Selected channel " + self.selected_channel.name)
         except KeyError:
             return False
         return True
@@ -116,13 +122,3 @@ class DiscordInterface:
     def send_message(self, msg: str) -> None:
         if self.selected_server and self.selected_channel:
             self.send_queue.put(msg)
-
-
-if __name__ == "__main__":
-    iface = DiscordInterface(None)
-    iface.init()
-    iface.get_servers()
-    iface.select_server(21)
-    iface.get_channels()
-    iface.select_channel(6)
-    iface.send_message("test")
