@@ -7,7 +7,7 @@ import re
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 
-from newdriver import Window, BaseStation, Handset, Buddy, logger, set_log_level
+from driver import Window, BaseStation, Handset, Buddy, logger, set_log_level
 from discord_interface import DiscordInterface
 import discord
 

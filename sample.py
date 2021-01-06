@@ -1,8 +1,8 @@
 from time import sleep
 from typing import Optional, Dict, Any
 
-import newdriver as driver
-from newdriver import Handset, Window, BaseStation, Buddy
+import driver
+from driver import Handset, Window, BaseStation, Buddy
 
 
 class Echo:
