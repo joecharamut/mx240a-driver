@@ -1,0 +1,7 @@
+> = handset -> pc
+< = pc -> handset
+
+
+> fN 9b 80 xx: xx buddy ids
+< e1 c9 xx: xx room id starting 0x81
+< 8N xx tt: xx room id, tt ascii data (no null?)

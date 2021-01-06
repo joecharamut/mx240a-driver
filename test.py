@@ -2,12 +2,14 @@ import time
 import os
 import json
 from typing import Optional, Any, Dict
+import re
 
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 
 from newdriver import Window, BaseStation, Handset, Buddy, logger, set_log_level
 from discord_interface import DiscordInterface
+import discord
 
 
 def read_data() -> dict:
@@ -132,7 +134,6 @@ class IMDiscord:
         if self.first_open:
             self.first_open = False
             window.send_message("Welcome to IMDiscord")
-            window.send_message("For help send /help")
             window.send_message("To login send /login")
 
     def window_close_callback(self, window: Window) -> None:
@@ -152,9 +153,10 @@ class IMDiscord:
             self.current_window.send_message("Logging in...")
             with open("data/self.token") as f:
                 self.discord_client.init(f.read().strip())
-        if cmd == "server" or cmd == "s":
+        elif cmd == "server" or cmd == "s":
             if parts[1].isdigit():
                 i = int(parts[1])
+                logger.debug(i.__repr__())
                 self.discord_client.select_server(i)
                 self.current_window.send_message(f"Selected server: {self.discord_client.get_servers()[i][1]}")
             else:
@@ -163,27 +165,40 @@ class IMDiscord:
                 for i, name in self.discord_client.get_servers():
                     if search in name:
                         results.append((i, name))
+                if len(results) == 0:
+                    self.current_window.send_message("No Results")
                 for result in results:
                     self.current_window.send_message(f"({result[0]}): {result[1]}")
-        if cmd == "channel" or cmd == "c":
+        elif cmd == "channel" or cmd == "c":
             if parts[1].isdigit():
                 i = int(parts[1])
+                self.current_window = self.handset.new_group()
                 self.discord_client.select_channel(i)
-                self.current_window.send_message(f"Selected channel: {self.discord_client.get_channels()[i][1]}")
+                self.current_window.send_message(f"Joined Channel {self.discord_client.get_channels()[i][1]}", "Driver")
             else:
                 search = " ".join(parts[1:])
                 results = []
                 for i, name in self.discord_client.get_channels():
                     if search in name:
                         results.append((i, name))
+                if len(results) == 0:
+                    self.current_window.send_message("No Results")
                 for result in results:
                     self.current_window.send_message(f"({result[0]}): {result[1]}")
+        else:
+            self.current_window.send_message(f"Unknown Command: {cmd}")
 
     def discord_ready_callback(self) -> None:
         self.current_window.send_message(f"Logged in as {self.discord_client.client.user.name}")
 
-    def discord_message_callback(self, message) -> None:
-        self.current_window.send_message(f"<{message.author}>: {message.clean_content}")
+    def discord_message_callback(self, message: discord.Message) -> None:
+        message_text = message.clean_content
+
+        # encode emojis
+        message_text = re.sub(R"<(:[a-zA-Z0-9-_]+:)\d{18}>", R" \1", message_text)
+
+        message_author = message.author.display_name.replace(":", "")
+        self.current_window.send_message(message_text, message_author)
 
 
 if __name__ == "__main__":

@@ -213,16 +213,26 @@ class Buddy:
 class Window:
     handset: "Handset"
     window_id: int
+    is_group: bool
 
-    def __init__(self, handset: "Handset", window_id: int) -> None:
+    def __init__(self, handset: "Handset", window_id: int, is_group: bool) -> None:
         self.handset = handset
         self.window_id = window_id
+        self.is_group = is_group
 
-    def send_message(self, message: str) -> None:
+    def send_message(self, message: str, username: Optional[str] = None) -> None:
         # first msg packet requires leading null
-        msg_bytes = [0x00, *as_bytes(message)]
-        msg_parts = [msg_bytes[i:i + 21] for i in range(0, len(msg_bytes), 21)]
-        if len(msg_parts[-1]) == 21:
+        if not username and not self.is_group:
+            username = [0x00]
+        elif not username and self.is_group:
+            username = as_bytes("None:")
+            logger.warning("Group messages require a username")
+        else:
+            username = as_bytes(username + ":")
+        msg_bytes = [*username, *as_bytes(message)]
+        payload_len = 21 if not self.is_group else 22
+        msg_parts = [msg_bytes[i:i + payload_len] for i in range(0, len(msg_bytes), payload_len)]
+        if len(msg_parts[-1]) == payload_len:
             # and some more padding for the last 0xff, just in case
             msg_parts.append([])
 
@@ -252,6 +262,7 @@ class Handset:
     password: Optional[str]
     buddy_list: Dict[str, List[Optional[Buddy]]]
     windows: Dict[int, Window]
+    next_group_id: int
 
     message_callback = Optional[Callable[[str], None]]
     window_open_callback = Optional[Callable[[Window], None]]
@@ -270,13 +281,14 @@ class Handset:
 
         self.buddy_list = {}
         self.windows = {}
+        self.next_group_id = 0x81
 
         self.message_callback = None
         self.window_open_callback = None
         self.window_close_callback = None
 
     def open_window(self, window_id: int) -> None:
-        self.windows[window_id] = window = Window(self, window_id)
+        self.windows[window_id] = window = Window(self, window_id, False)
         if self.window_open_callback:
             self.window_open_callback(window)
 
@@ -286,6 +298,15 @@ class Handset:
             del self.windows[window_id]
             if self.window_close_callback:
                 self.window_close_callback(window)
+
+    def new_group(self) -> Window:
+        self.windows[self.next_group_id] = window = Window(self, self.next_group_id, True)
+        self.next_group_id += 1
+
+        self.base.write(bytes([int(f"e{self.num}", 16), 0xc9, window.window_id, 0xff]))
+        self.base.ack()
+
+        return window
 
     def add_buddy(self, buddy: Buddy, group: str) -> None:
         group = group[0:6].ljust(6, " ")
@@ -351,8 +372,6 @@ class Packet:
         elif byte_1_hi == 0xf or byte_1_hi == 0xe:
             if byte_2 == 0xfd:
                 return PacketType.ACK
-            elif byte_2 == 0x69:
-                ...
             elif byte_2 == 0x8c:
                 return PacketType.HandsetDisconnected
             elif byte_2 == 0x8e:
@@ -413,6 +432,10 @@ class BaseStation:
     write_lock: Lock
     write_buffer: Queue
 
+    poll_thread: Thread
+    poll_loop_flag: bool
+    handset_connected: bool
+
     last_write: bytes
 
     handsets: List[Optional[Handset]]
@@ -444,6 +467,10 @@ class BaseStation:
         self.write_loop_flag = False
         self.write_lock = Lock()
         self.write_buffer = Queue()
+
+        self.poll_thread = Thread(target=self.poll_loop)
+        self.poll_loop_flag = False
+        self.handset_connected = False
 
         self.last_write = b""
 
@@ -494,6 +521,7 @@ class BaseStation:
 
         self.decode_thread.start()
         self.process_thread.start()
+        self.poll_thread.start()
 
     def read(self, blocking: bool = True, timeout: Optional[float] = None) -> bytes:
         if self.read_buffer.empty() and not blocking:
@@ -549,7 +577,18 @@ class BaseStation:
 
         logger.debug("Exiting write thread")
 
+    def poll_loop(self) -> None:
+        logger.debug("Starting poll thread")
+        while not self.poll_loop_flag:
+            self.ack()
+            time.sleep(1 if self.handset_connected else 3)
+        logger.debug("Exiting poll thread")
+
     def close(self) -> None:
+        if self.poll_thread.is_alive():
+            self.poll_loop_flag = True
+            self.poll_thread.join()
+
         if self.process_thread.is_alive():
             for _ in range(16):
                 self.decoded_packet_buffer.put(Packet(PacketType.Unknown))
@@ -626,7 +665,6 @@ class BaseStation:
 
             if packet.packet_type == PacketType.Message or packet.packet_type == PacketType.MessageContinuation:
                 num = packet.handset_num()
-                logger.trace(num)
                 handset = self.handsets[num]
                 message = self.read_string(packet)
 
@@ -636,7 +674,22 @@ class BaseStation:
                         handset.message_callback(message)
             elif packet.packet_type == PacketType.ACK or packet.packet_type == PacketType.MysteryACK:
                 self.ack()
+            elif packet.packet_type == PacketType.HandsetRegistration:
+                handset_id = "".join([to_hex(n) for n in packet.bytes()[2:][0:4]])
+                logger.debug(f"Handset registering, ID: {handset_id}")
+
+                result = True
+                if self.register_callback:
+                    result = self.register_callback(handset_id)
+
+                if result:
+                    # accept registration
+                    self.write(b"\xee\xd3")
+                else:
+                    # reject registration
+                    self.write(b"\xee\xc5")
             elif packet.packet_type == PacketType.HandsetConnecting:
+                self.handset_connected = True
                 handset_id = "".join([to_hex(n) for n in packet.bytes()[2:][0:4]])
                 handset_num = packet.handset_num()
                 logger.debug(f"Handset connecting, ID: {handset_id}")
@@ -710,6 +763,7 @@ class BaseStation:
                                 self.write(bytes([int(f"8{handset_num}", 16), 0xcd, tone_id, *part, 0xff]))
                                 self.ack()
             elif packet.packet_type == PacketType.HandsetDisconnected:
+                self.handset_connected = False
                 handset = self.handsets[packet.handset_num()]
                 logger.debug("Handset disconnect: num {}", handset.num)
                 if self.disconnect_callback:
@@ -728,6 +782,8 @@ class BaseStation:
                 result = True
                 if self.login_callback:
                     result = self.login_callback(handset)
+
+                time.sleep(0.5)
 
                 if result:
                     self.write(bytes([int(f"e{handset_num}", 16), 0xd3, 0xff]))
@@ -760,7 +816,7 @@ class BaseStation:
             elif packet.packet_type == PacketType.HandsetInvite:
                 ...
             else:
-                logger.warning("Unknown Packet: {}", hexdump(packet.bytes()))
+                logger.warning("Unknown Packet: {}", packet)
 
         logger.debug("Exiting process thread")
 
@@ -787,6 +843,6 @@ class BaseStation:
         return None
 
     def ack(self, expect_reply: bool = False) -> None:
-        self.write(b"\xad\xff", True)
+        self.write(b"\xad", True)
         if expect_reply:
             logger.debug("NAK: " + hexdump(self.read()))

@@ -1,10 +1,13 @@
 import sys
-from typing import List, Tuple, Optional, Callable
+from typing import List, Tuple, Optional, Callable, Union, Any
 from threading import Thread
 from queue import Queue
 
 import discord
 import asyncio
+
+from discord import Client
+from discord.abc import PrivateChannel
 from loguru import logger
 
 
@@ -13,22 +16,51 @@ logger.add(sys.stdout, level="DEBUG", format="[{time:HH:mm:ss}] [{level}] {messa
            backtrace=True, diagnose=True, enqueue=True)
 
 
+class PrivateChannelWrapper:
+    _wrapped_channel: PrivateChannel
+
+    def __init__(self, obj: discord.abc.PrivateChannel) -> None:
+        self._wrapped_channel = obj
+
+    @property
+    def name(self) -> str:
+        if isinstance(self._wrapped_channel, discord.GroupChannel):
+            return str(self._wrapped_channel.name)
+        elif isinstance(self._wrapped_channel, discord.DMChannel):
+            return self._wrapped_channel.recipient.name
+        else:
+            assert False
+
+    def __getattr__(self, attr: Any) -> Any:
+        return getattr(self._wrapped_channel, attr)
+
+
+class DMServer:
+    client: Client
+    channels: List[PrivateChannelWrapper]
+    name: str
+
+    def __init__(self, client: discord.Client) -> None:
+        self.client = client
+        self.name = "DM"
+        self.channels = [PrivateChannelWrapper(c) for c in self.client.private_channels]
+
+
 class DiscordInterface:
     client_thread: Optional[Thread]
-    client_ready: bool
 
-    selected_server: Optional[discord.Guild]
+    selected_server: Optional[Union[discord.Guild, DMServer]]
     selected_channel: Optional[discord.TextChannel]
 
     ready_callback: Optional[Callable[[], None]]
     message_callback: Optional[Callable[[discord.Message], None]]
 
     send_queue: Queue
+    send_thread_flag: bool
 
     def __init__(self) -> None:
         self.client = discord.Client()
         self.client_thread = None
-        self.client_ready = False
 
         self.selected_server = None
         self.selected_channel = None
@@ -37,6 +69,7 @@ class DiscordInterface:
         self.message_callback = None
 
         self.send_queue = Queue()
+        self.send_thread_flag = False
         self.event_loop = asyncio.get_event_loop()
 
         self.client.event(self.on_message)
@@ -56,19 +89,18 @@ class DiscordInterface:
         if message.author == self.client.user:
             return
 
-        if self.selected_server and self.selected_channel and message.channel == self.selected_channel:
+        if self.selected_channel and self.selected_channel.id == message.channel.id:
             if self.message_callback:
                 self.message_callback(message)
             logger.debug("{} #{} <{}>: {}", message.guild, message.channel, message.author, message.clean_content)
 
     async def on_ready(self) -> None:
-        self.client_ready = True
         logger.debug("Discord bot logged in as: {} ({})".format(self.client.user.name, self.client.user.id))
         if self.ready_callback:
             self.ready_callback()
 
     async def send_loop_func(self) -> None:
-        while True:
+        while not self.send_thread_flag:
             while not self.send_queue.empty():
                 if self.selected_server and self.selected_channel:
                     await self.selected_channel.send(self.send_queue.get())
@@ -76,10 +108,12 @@ class DiscordInterface:
             await asyncio.sleep(1)
 
     def close(self) -> None:
-        asyncio.get_event_loop().create_task(self.client.close())
         if self.client_thread:
+            self.send_thread_flag = True
+            self.event_loop.create_task(self.client.logout())
             self.client_thread.join()
-        logger.debug("Exiting discord...")
+            self.event_loop.close()
+            logger.debug("Exiting discord...")
 
     def get_servers(self) -> List[Tuple[int, str]]:
         servers = [(0, "DM")]
@@ -94,18 +128,27 @@ class DiscordInterface:
             return None
 
         channels = []
-        for i, channel in enumerate([c for c in self.selected_server.channels if c.type is discord.ChannelType.text]):
-            channels.append((i, "#"+channel.name))
+        for i, channel in enumerate([c for c in self.selected_server.channels
+                                     if c.type is discord.ChannelType.text
+                                     or c.type is discord.ChannelType.private
+                                     or c.type is discord.ChannelType.group]):
+            if channel.type is discord.ChannelType.text:
+                channels.append((i, "#"+channel.name))
+            else:
+                channels.append((i, channel.name))
 
         logger.debug("Channels in server: " + channels.__repr__())
         return channels
 
     def select_server(self, index: int) -> bool:
-        try:
-            self.selected_server = self.client.guilds[index-1]
-            logger.debug("Selected server " + self.selected_server.name)
-        except KeyError:
-            return False
+        if index == 0:
+            self.selected_server = DMServer(self.client)
+        else:
+            try:
+                self.selected_server = self.client.guilds[index-1]
+            except KeyError:
+                return False
+        logger.debug("Selected server " + self.selected_server.name)
         return True
 
     def select_channel(self, index: int) -> bool:
@@ -113,7 +156,9 @@ class DiscordInterface:
             return False
         try:
             self.selected_channel = [c for c in self.selected_server.channels
-                                     if c.type is discord.ChannelType.text][index]
+                                     if c.type is discord.ChannelType.text
+                                     or c.type is discord.ChannelType.private
+                                     or c.type is discord.ChannelType.group][index]
             logger.debug("Selected channel " + self.selected_channel.name)
         except KeyError:
             return False
