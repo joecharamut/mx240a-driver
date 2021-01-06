@@ -47,9 +47,10 @@ class IMDiscord:
         self.base = base = BaseStation()
 
         # setup some hooks
-        base.register_callback = self.register_callback
-        base.connect_callback = self.connect_callback
-        base.login_callback = self.login_callback
+        base.register_callback = IMDiscord.register_callback
+        base.connect_callback = IMDiscord.connect_callback
+        base.login_callback = IMDiscord.login_callback
+        base.disconnect_callback = self.disconnect_callback
         base.post_login_callback = self.post_login_callback
 
         self.discord_client = client = DiscordInterface()
@@ -59,21 +60,22 @@ class IMDiscord:
         self.handset = None
         self.current_window = None
         self.first_open = True
+        self.running = True
 
     def run(self) -> None:
         # lets go
         try:
             self.base.open()
-            # idle to keep main thread active
-            while True:
-                time.sleep(10)
+            while self.running:
+                time.sleep(1)
         except KeyboardInterrupt:
             pass
         finally:
             self.discord_client.close()
             self.base.close()
 
-    def register_callback(self, handset_id: str) -> bool:
+    @staticmethod
+    def register_callback(handset_id: str) -> bool:
         root = tk.Tk()
         reg_ok = messagebox.askyesno("Registration", f"OK to register handset ID {handset_id}?")
         if reg_ok:
@@ -89,7 +91,8 @@ class IMDiscord:
             root.destroy()
             return False
 
-    def connect_callback(self, handset: Handset) -> Dict[str, Any]:
+    @staticmethod
+    def connect_callback(handset: Handset) -> Dict[str, Any]:
         data = read_data()
         connect_data = {
             "name": "IMFree",
@@ -101,7 +104,13 @@ class IMDiscord:
 
         return connect_data
 
-    def login_callback(self, handset: Handset) -> bool:
+    def disconnect_callback(self, handset: Handset) -> None:
+        logger.debug(handset)
+        self.discord_client.close()
+        self.running = False
+
+    @staticmethod
+    def login_callback(handset: Handset) -> bool:
         data = read_data()
 
         if handset.id not in data["handsets"]:

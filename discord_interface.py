@@ -1,4 +1,5 @@
 import sys
+from asyncio import Task
 from typing import List, Tuple, Optional, Callable, Union, Any
 from threading import Thread
 from queue import Queue
@@ -6,8 +7,7 @@ from queue import Queue
 import discord
 import asyncio
 
-from discord import Client
-from discord.abc import PrivateChannel
+from discord import Client, ChannelType
 from loguru import logger
 
 
@@ -17,7 +17,7 @@ logger.add(sys.stdout, level="DEBUG", format="[{time:HH:mm:ss}] [{level}] {messa
 
 
 class PrivateChannelWrapper:
-    _wrapped_channel: PrivateChannel
+    _wrapped_channel: discord.abc.PrivateChannel
 
     def __init__(self, obj: discord.abc.PrivateChannel) -> None:
         self._wrapped_channel = obj
@@ -25,7 +25,7 @@ class PrivateChannelWrapper:
     @property
     def name(self) -> str:
         if isinstance(self._wrapped_channel, discord.GroupChannel):
-            return str(self._wrapped_channel.name)
+            return str(self._wrapped_channel.name)  # some are None for whatever reason
         elif isinstance(self._wrapped_channel, discord.DMChannel):
             return self._wrapped_channel.recipient.name
         else:
@@ -48,6 +48,7 @@ class DMServer:
 
 class DiscordInterface:
     client_thread: Optional[Thread]
+    client_task: Optional[Task]
 
     selected_server: Optional[Union[discord.Guild, DMServer]]
     selected_channel: Optional[discord.TextChannel]
@@ -61,6 +62,7 @@ class DiscordInterface:
     def __init__(self) -> None:
         self.client = discord.Client()
         self.client_thread = None
+        self.client_task = None
 
         self.selected_server = None
         self.selected_channel = None
@@ -77,7 +79,7 @@ class DiscordInterface:
 
     def init(self, token: str) -> None:
         # asyncio.set_event_loop(self.event_loop)
-        self.event_loop.create_task(self.client.start(token, bot=False))
+        self.client_task = self.event_loop.create_task(self.client.start(token, bot=False))
         self.event_loop.create_task(self.send_loop_func())
 
         self.client_thread = Thread(target=self.event_loop.run_forever)
@@ -108,12 +110,13 @@ class DiscordInterface:
             await asyncio.sleep(1)
 
     def close(self) -> None:
-        if self.client_thread:
+        if self.client_thread and self.client_thread.is_alive():
+            logger.debug("Exiting discord thread")
             self.send_thread_flag = True
-            self.event_loop.create_task(self.client.logout())
+            self.client_task.cancel()
+            asyncio.ensure_future(self.client.close())
+            self.event_loop.stop()
             self.client_thread.join()
-            self.event_loop.close()
-            logger.debug("Exiting discord...")
 
     def get_servers(self) -> List[Tuple[int, str]]:
         servers = [(0, "DM")]
@@ -129,10 +132,8 @@ class DiscordInterface:
 
         channels = []
         for i, channel in enumerate([c for c in self.selected_server.channels
-                                     if c.type is discord.ChannelType.text
-                                     or c.type is discord.ChannelType.private
-                                     or c.type is discord.ChannelType.group]):
-            if channel.type is discord.ChannelType.text:
+                                     if c.type in [ChannelType.text, ChannelType.private, ChannelType.group]]):
+            if channel.type is ChannelType.text:
                 channels.append((i, "#"+channel.name))
             else:
                 channels.append((i, channel.name))
@@ -156,9 +157,7 @@ class DiscordInterface:
             return False
         try:
             self.selected_channel = [c for c in self.selected_server.channels
-                                     if c.type is discord.ChannelType.text
-                                     or c.type is discord.ChannelType.private
-                                     or c.type is discord.ChannelType.group][index]
+                                     if c.type in [ChannelType.text, ChannelType.private, ChannelType.group]][index]
             logger.debug("Selected channel " + self.selected_channel.name)
         except KeyError:
             return False

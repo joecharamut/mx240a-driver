@@ -763,10 +763,19 @@ class BaseStation:
                                 self.write(bytes([int(f"8{handset_num}", 16), 0xcd, tone_id, *part, 0xff]))
                                 self.ack()
             elif packet.packet_type == PacketType.HandsetDisconnected:
-                self.handset_connected = False
-                handset = self.handsets[packet.handset_num()]
-                logger.debug("Handset disconnect: num {}", handset.num)
-                if self.disconnect_callback:
+                num = packet.handset_num()
+                handset = self.handsets[num]
+                self.handsets[num] = None
+
+                for item in self.handsets:
+                    if item:
+                        self.handset_connected = True
+                        break
+                else:
+                    self.handset_connected = False
+
+                logger.debug("Handset disconnect: num {}", num)
+                if self.disconnect_callback and handset:
                     self.disconnect_callback(handset)
             elif packet.packet_type == PacketType.HandsetUsername:
                 username = self.read_string(packet)
