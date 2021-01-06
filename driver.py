@@ -308,7 +308,7 @@ class Handset:
 
         return window
 
-    def add_buddy(self, buddy: Buddy, group: str) -> None:
+    def add_buddy(self, buddy: Buddy, group: str) -> int:
         group = group[0:6].ljust(6, " ")
         if group not in self.buddy_list.keys():
             self.buddy_list[group] = [None]
@@ -327,6 +327,7 @@ class Handset:
             int(f"a{self.num}", 16), 0xc9, 0x01, 0xff
         ]))
         self.base.ack()
+        return buddy.id
 
 
 class PacketType(Enum):
