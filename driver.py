@@ -221,14 +221,16 @@ class Window:
         self.is_group = is_group
 
     def send_message(self, message: str, username: Optional[str] = None) -> None:
-        # first msg packet requires leading null
-        if not username and not self.is_group:
-            username = [0x00]
-        elif not username and self.is_group:
-            username = as_bytes("None:")
-            logger.warning("Group messages require a username")
+        # group messages have a username of ascii followed by a ':', messages to a buddy have null username
+        if self.is_group:
+            if not username:
+                username = as_bytes(":")
+                logger.warning("Group messages should have a username")
+            else:
+                username = as_bytes(username.replace(":", "") + ":")
         else:
-            username = as_bytes(username + ":")
+            username = [0x00]
+
         msg_bytes = [*username, *as_bytes(message)]
         payload_len = 21 if not self.is_group else 22
         msg_parts = [msg_bytes[i:i + payload_len] for i in range(0, len(msg_bytes), payload_len)]
@@ -632,7 +634,7 @@ class BaseStation:
 
             # start of new packet
             if data[0] & 0x80 and data[0] != 0xff and data[0] != 0xfe:
-                logger.trace(hexdump(data, True))
+                logger.trace(hexdump(data))
                 packet_type = Packet.detect_type(data[0], data[1])
                 logger.trace("Packet type: {}", packet_type)
                 if packet_type == PacketType.Unknown:
