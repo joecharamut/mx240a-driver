@@ -421,11 +421,7 @@ class BaseStation:
 
     read_thread: Thread
     read_loop_flag: bool
-    read_buffer: Queue
-
-    decode_thread: Thread
-    decode_loop_flag: bool
-    decoded_packet_buffer: Queue
+    packet_buffer: Queue
 
     process_thread: Thread
     process_loop_flag: bool
@@ -457,11 +453,7 @@ class BaseStation:
 
         self.read_thread = Thread(target=self.read_loop)
         self.read_loop_flag = False
-        self.read_buffer = Queue()
-
-        self.decode_thread = Thread(target=self.decode_loop)
-        self.decode_loop_flag = False
-        self.decoded_packet_buffer = Queue()
+        self.packet_buffer = Queue()
 
         self.process_thread = Thread(target=self.process_loop)
         self.process_loop_flag = False
@@ -512,28 +504,23 @@ class BaseStation:
         logger.debug("Initializing...")
         self._write(b"\xad\xef\x8d\xff")
 
-        buf = self.read(timeout=0.5)
-        if buf == b"":
+        packet: Optional[Packet]
+        try:
+            packet = self.packet_buffer.get(timeout=0.5)
+        except queue.Empty:
+            packet = None
+
+        if not packet:
             logger.trace("Init reply skipped for some reason?")
-        elif buf[0:2] == b"\xef\x01":
-            logger.trace(f"Init reply: {hexdump(buf[2:])}")
+        elif packet.packet_type == PacketType.BaseInitReply:
+            logger.trace("Init reply: {}", packet)
         else:
             logger.warning("Reading real data, you might want to restart the driver")
 
         logger.debug("Init complete")
 
-        self.decode_thread.start()
         self.process_thread.start()
         self.poll_thread.start()
-
-    def read(self, blocking: bool = True, timeout: Optional[float] = None) -> bytes:
-        if self.read_buffer.empty() and not blocking:
-            return b""
-
-        try:
-            return self.read_buffer.get(timeout=timeout)
-        except queue.Empty:
-            return b""
 
     def write(self, data: bytes, ack: bool = False) -> None:
         if not ack:
@@ -556,13 +543,37 @@ class BaseStation:
 
     def read_loop(self) -> None:
         logger.debug("Starting read thread")
+        packet_in_progress: Optional[Packet] = None
+
         while not self.read_loop_flag:
             try:
                 # read 16 bytes
                 data = bytes(self.device.read(16))
                 if len(data):
                     logger.trace(f"[RECV] {hexdump(data)}")
-                    self.read_buffer.put(data)
+
+                    # start of new packet
+                    if data[0] & 0x80 and data[0] != 0xff and data[0] != 0xfe:
+                        packet_type = Packet.detect_type(data[0], data[1])
+                        logger.trace("Packet type: {}", packet_type)
+                        if packet_type == PacketType.Unknown:
+                            raise ValueError(f"Unknown Packet {hexdump(data)}")
+                        packet_in_progress = Packet(packet_type)
+                        packet_in_progress.append_data(data)
+
+                        if 0xff in data:
+                            self.packet_buffer.put(packet_in_progress)
+                            logger.trace("Packet: {}", packet_in_progress)
+                            packet_in_progress = None
+                    else:
+                        if not packet_in_progress:
+                            logger.warning("Cannot append data to nonexistent packet")
+                        else:
+                            packet_in_progress.append_data(data)
+                            if 0xff in data or 0xfe in data:
+                                self.packet_buffer.put(packet_in_progress)
+                                logger.trace("Packet: {}", packet_in_progress)
+                                packet_in_progress = None
             except OSError:
                 # catch error on close()
                 pass
@@ -594,17 +605,10 @@ class BaseStation:
 
         if self.process_thread.is_alive():
             for _ in range(16):
-                self.decoded_packet_buffer.put(Packet(PacketType.Unknown))
+                self.packet_buffer.put(Packet(PacketType.Unknown))
 
             self.process_loop_flag = True
             self.process_thread.join()
-
-        if self.decode_thread.is_alive():
-            for _ in range(16):
-                self.read_buffer.put(b"")
-
-            self.decode_loop_flag = True
-            self.decode_thread.join()
 
         if self.read_thread.is_alive():
             self.read_loop_flag = True
@@ -621,47 +625,10 @@ class BaseStation:
         self.device.close()
         logger.debug("Bye!")
 
-    def decode_loop(self) -> None:
-        logger.debug("Starting decode thread")
-
-        packet_in_progress = None
-
-        while not self.decode_loop_flag:
-            data = self.read()
-
-            if data == b"":
-                continue
-
-            # start of new packet
-            if data[0] & 0x80 and data[0] != 0xff and data[0] != 0xfe:
-                logger.trace(hexdump(data))
-                packet_type = Packet.detect_type(data[0], data[1])
-                logger.trace("Packet type: {}", packet_type)
-                if packet_type == PacketType.Unknown:
-                    raise ValueError(f"Unknown Packet {hexdump(data)}")
-                packet_in_progress = Packet(packet_type)
-                packet_in_progress.append_data(data)
-
-                if 0xff in data:
-                    self.decoded_packet_buffer.put(packet_in_progress)
-                    logger.trace("Packet: {}", packet_in_progress)
-                    packet_in_progress = None
-            else:
-                if not packet_in_progress:
-                    logger.warning("Cannot append data to nonexistent packet")
-                else:
-                    packet_in_progress.append_data(data)
-                    if 0xff in data or 0xfe in data:
-                        self.decoded_packet_buffer.put(packet_in_progress)
-                        logger.trace("Packet: {}", packet_in_progress)
-                        packet_in_progress = None
-
-        logger.debug("Exiting decode thread")
-
     def process_loop(self) -> None:
         logger.debug("Starting process thread")
         while not self.process_loop_flag:
-            packet = self.decoded_packet_buffer.get()
+            packet = self.packet_buffer.get()
 
             if packet.packet_type == PacketType.Unknown:
                 continue
@@ -854,7 +821,5 @@ class BaseStation:
             return string
         return None
 
-    def ack(self, expect_reply: bool = False) -> None:
+    def ack(self) -> None:
         self.write(b"\xad", True)
-        if expect_reply:
-            logger.debug("NAK: " + hexdump(self.read()))
