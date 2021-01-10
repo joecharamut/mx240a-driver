@@ -435,8 +435,6 @@ class BaseStation:
     poll_loop_flag: bool
     handset_connected: bool
 
-    last_write: bytes
-
     handsets: List[Optional[Handset]]
 
     string_buffer: Optional[bytearray]
@@ -466,8 +464,6 @@ class BaseStation:
         self.poll_thread = Thread(target=self.poll_loop)
         self.poll_loop_flag = False
         self.handset_connected = False
-
-        self.last_write = b""
 
         self.handsets = [None, None, None, None, None, None, None, None]
 
@@ -502,7 +498,7 @@ class BaseStation:
         self.write_thread.start()
 
         logger.debug("Initializing...")
-        self._write(b"\xad\xef\x8d\xff")
+        self.write(b"\xad\xef\x8d\xff")
 
         packet: Optional[Packet]
         try:
@@ -522,10 +518,7 @@ class BaseStation:
         self.process_thread.start()
         self.poll_thread.start()
 
-    def write(self, data: bytes, ack: bool = False) -> None:
-        if not ack:
-            self.last_write = data
-
+    def write(self, data: bytes) -> None:
         self.write_buffer.put(data)
 
     def _write(self, data: bytes) -> None:
@@ -822,4 +815,4 @@ class BaseStation:
         return None
 
     def ack(self) -> None:
-        self.write(b"\xad", True)
+        self.write(b"\xad")
