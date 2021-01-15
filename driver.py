@@ -199,13 +199,13 @@ class Status(Enum):
 
 class Buddy:
     screen_name: str
-    id: Optional[int]
+    id: int
     status: Status
     mobile: bool
 
     def __init__(self, screen_name: str) -> None:
         self.screen_name = screen_name
-        self.id = None
+        self.id = 0
         self.status = Status.ACTIVE
         self.mobile = False
 
@@ -214,11 +214,13 @@ class Window:
     handset: "Handset"
     window_id: int
     is_group: bool
+    buddy: Optional[Buddy]
 
-    def __init__(self, handset: "Handset", window_id: int, is_group: bool) -> None:
+    def __init__(self, handset: "Handset", window_id: int, is_group: bool = False, buddy: Buddy = None) -> None:
         self.handset = handset
         self.window_id = window_id
         self.is_group = is_group
+        self.buddy = buddy
 
     def send_message(self, message: str, username: Optional[str] = None) -> None:
         # group messages have a username of ascii followed by a ':', messages to a buddy have null username
@@ -231,7 +233,27 @@ class Window:
         else:
             username = [0x00]
 
-        msg_bytes = [*username, *as_bytes(message)]
+        username_len = len(username) if self.is_group else len(self.buddy.screen_name + ":")
+        message_lines = [0 for _ in range(username_len)]
+        message_lines.extend(as_bytes(message))
+        message_lines = [message_lines[i:i + 30] for i in range(0, len(message_lines), 30)]
+        newlines = []
+        in_progress = ""
+        for line in message_lines:
+            for char in line:
+                # linefeed
+                if char == 0xa or len(in_progress) == 30:
+                    newlines.append(in_progress)
+                    in_progress = ""
+                in_progress += chr(char)
+        newlines.append(in_progress)
+
+        final_message = ""
+        for line in newlines[:-1]:
+            final_message += line.ljust(30).replace("\0", "")
+        final_message += newlines[-1].replace("\0", "")
+
+        msg_bytes = [*username, *as_bytes(final_message)]
         payload_len = 21 if not self.is_group else 22
         msg_parts = [msg_bytes[i:i + payload_len] for i in range(0, len(msg_bytes), payload_len)]
         if len(msg_parts[-1]) == payload_len:
@@ -265,6 +287,7 @@ class Handset:
     buddy_list: Dict[str, List[Optional[Buddy]]]
     windows: Dict[int, Window]
     next_group_id: int
+    next_buddy_id: int
 
     message_callback = Optional[Callable[[str], None]]
     window_open_callback = Optional[Callable[[Window], None]]
@@ -283,6 +306,7 @@ class Handset:
 
         self.buddy_list = {}
         self.windows = {}
+        self.next_buddy_id = 0x01
         self.next_group_id = 0x81
 
         self.message_callback = None
@@ -290,7 +314,14 @@ class Handset:
         self.window_close_callback = None
 
     def open_window(self, window_id: int) -> None:
-        self.windows[window_id] = window = Window(self, window_id, False)
+        window_buddy = None
+        for group in self.buddy_list.values():
+            for buddy in group:
+                if buddy.id == window_id:
+                    window_buddy = buddy
+                    break
+        assert window_buddy
+        self.windows[window_id] = window = Window(self, window_id, False, window_buddy)
         if self.window_open_callback:
             self.window_open_callback(window)
 
@@ -313,8 +344,9 @@ class Handset:
     def add_buddy(self, buddy: Buddy, group: str) -> int:
         group = group[0:6].ljust(6, " ")
         if group not in self.buddy_list.keys():
-            self.buddy_list[group] = [None]
-        buddy.id = len(self.buddy_list[group])
+            self.buddy_list[group] = []
+        buddy.id = self.next_buddy_id
+        self.next_buddy_id += 1
         self.buddy_list[group].append(buddy)
         status_str = (f"{'A' if buddy.status == Status.ACTIVE else 'I' if buddy.status == Status.IDLE else 'U'}" +
                       f"{'Y' if buddy.mobile else 'N'}" + "N")
