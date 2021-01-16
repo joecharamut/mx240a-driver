@@ -1,7 +1,12 @@
-> = handset -> pc
-< = pc -> handset
+rx| = handset -> pc
+tx| = pc -> handset
 
 
-> fN 9b 80 xx: xx buddy ids
-< e1 c9 xx: xx room id starting 0x81
-< 8N xx tt: xx room id, tt ascii data (no null?)
+rx| fN 9b 80 xx: xx buddy ids
+tx| e1 c9 xx: xx room id starting 0x81
+tx| 8N xx tt: xx room id, tt ascii data (no null?)
+
+
+tx| cN c3 ** ff: invitation request (** = ascii username)
+rx| fN 9d xx ff: accept/deny request (xx = 44 'D' deny, xx = 41 'A' accept)
+

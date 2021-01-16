@@ -292,6 +292,7 @@ class Handset:
     message_callback = Optional[Callable[[str], None]]
     window_open_callback = Optional[Callable[[Window], None]]
     window_close_callback = Optional[Callable[[Window], None]]
+    chat_request_callback = Optional[Callable[[bool], None]]
 
     def __init__(self, base: "BaseStation", handset_num: int, handset_id: str) -> None:
         self.base = base
@@ -312,6 +313,7 @@ class Handset:
         self.message_callback = None
         self.window_open_callback = None
         self.window_close_callback = None
+        self.chat_request_callback = None
 
     def open_window(self, window_id: int) -> None:
         window_buddy = None
@@ -363,6 +365,11 @@ class Handset:
         self.base.ack()
         return buddy.id
 
+    def invite_request(self, name: str) -> None:
+        self.base.write(bytes([
+            int(f"c{self.num}", 16), 0xc3, *as_bytes(name), 0xff
+        ]))
+
 
 class PacketType(Enum):
     Unknown = 0x00
@@ -382,6 +389,7 @@ class PacketType(Enum):
     HandsetAway = 0x0e
     HandsetWarning = 0x0f
     HandsetInvite = 0x10
+    HandsetRequestResponse = 0x11
 
 
 class Packet:
@@ -427,6 +435,8 @@ class Packet:
                 return PacketType.HandsetWarning
             elif byte_2 == 0x9b:
                 return PacketType.HandsetInvite
+            elif byte_2 == 0x9d:
+                return PacketType.HandsetRequestResponse
             else:
                 return PacketType.Message
         elif byte_1_hi == 0xa or byte_1_hi == 0xd or byte_1_hi == 0x8:
@@ -438,14 +448,16 @@ class Packet:
         for b in data:
             self._packet_data.append(b)
 
+    @property
     def bytes(self) -> bytes:
         return bytes(self._packet_data)
 
+    @property
     def handset_num(self) -> int:
         return int(to_hex(self._packet_data[0])[1], 16)
 
     def __repr__(self) -> str:
-        return f"<Packet type: {self.packet_type} data: {hexdump(self.bytes())}>"
+        return f"<Packet type: {self.packet_type} data: {hexdump(self.bytes)}>"
 
 
 class BaseStation:
@@ -659,7 +671,7 @@ class BaseStation:
                 continue
 
             if packet.packet_type == PacketType.Message or packet.packet_type == PacketType.MessageContinuation:
-                num = packet.handset_num()
+                num = packet.handset_num
                 handset = self.handsets[num]
                 message = self.read_string(packet)
 
@@ -670,7 +682,7 @@ class BaseStation:
             elif packet.packet_type == PacketType.ACK or packet.packet_type == PacketType.MysteryACK:
                 self.ack()
             elif packet.packet_type == PacketType.HandsetRegistration:
-                handset_id = "".join([to_hex(n) for n in packet.bytes()[2:][0:4]])
+                handset_id = "".join([to_hex(n) for n in packet.bytes[2:][0:4]])
                 logger.debug(f"Handset registering, ID: {handset_id}")
 
                 result = True
@@ -685,8 +697,8 @@ class BaseStation:
                     self.write(b"\xee\xc5")
             elif packet.packet_type == PacketType.HandsetConnecting:
                 self.handset_connected = True
-                handset_id = "".join([to_hex(n) for n in packet.bytes()[2:][0:4]])
-                handset_num = packet.handset_num()
+                handset_id = "".join([to_hex(n) for n in packet.bytes[2:][0:4]])
+                handset_num = packet.handset_num
                 logger.debug(f"Handset connecting, ID: {handset_id}")
                 self.handsets[handset_num] = Handset(self, handset_num, handset_id)
                 handset = self.handsets[handset_num]
@@ -758,7 +770,7 @@ class BaseStation:
                                 self.write(bytes([int(f"8{handset_num}", 16), 0xcd, tone_id, *part, 0xff]))
                                 self.ack()
             elif packet.packet_type == PacketType.HandsetDisconnected:
-                num = packet.handset_num()
+                num = packet.handset_num
                 handset = self.handsets[num]
                 self.handsets[num] = None
 
@@ -775,10 +787,10 @@ class BaseStation:
             elif packet.packet_type == PacketType.HandsetUsername:
                 username = self.read_string(packet)
                 logger.debug(f"Handset username: {username}")
-                self.handsets[packet.handset_num()].username = username
+                self.handsets[packet.handset_num].username = username
             elif packet.packet_type == PacketType.HandsetPassword:
                 password = self.read_string(packet)
-                handset_num = packet.handset_num()
+                handset_num = packet.handset_num
                 logger.debug(f"Handset password: {password}")
                 handset = self.handsets[handset_num]
                 handset.password = password
@@ -800,13 +812,13 @@ class BaseStation:
                     self.write(bytes([int(f"e{handset_num}", 16), 0xe5, 0x02, 0xff]))
                     logger.debug("Login failed")
             elif packet.packet_type == PacketType.OpenWindow:
-                handset = self.handsets[packet.handset_num()]
-                window_id = packet.bytes()[2]
+                handset = self.handsets[packet.handset_num]
+                window_id = packet.bytes[2]
                 logger.debug("Window Open: id {}", window_id)
                 handset.open_window(window_id)
             elif packet.packet_type == PacketType.CloseWindow:
-                handset = self.handsets[packet.handset_num()]
-                window_id = packet.bytes()[2]
+                handset = self.handsets[packet.handset_num]
+                window_id = packet.bytes[2]
                 logger.debug("Window Close: id {}", window_id)
                 handset.close_window(window_id)
             elif packet.packet_type == PacketType.HandsetAway:
@@ -819,6 +831,12 @@ class BaseStation:
                 ...
             elif packet.packet_type == PacketType.HandsetInvite:
                 ...
+            elif packet.packet_type == PacketType.HandsetRequestResponse:
+                handset = self.handsets[packet.handset_num]
+                choice = chr(packet.bytes[2]) == "A"  # A = accept/true, else (D) = deny/false
+
+                if handset.chat_request_callback:
+                    handset.chat_request_callback(choice)
             else:
                 logger.warning("Unknown Packet: {}", packet)
 
@@ -827,7 +845,7 @@ class BaseStation:
     def read_string(self, packet: Packet) -> Optional[str]:
         if not self.string_buffer:
             self.string_buffer = bytearray()
-        buffer = packet.bytes()
+        buffer = packet.bytes
         finished = False
 
         for byte in buffer:
