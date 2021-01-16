@@ -312,7 +312,7 @@ class IMDiscord:
         elif self.current_window.window_id == self.console_id:
             logger.debug("Ignoring msg to console: {}", message)
         else:
-            self.discord_client.send_message(self.selected_channel, message)
+            self.discord_client.send_message(self.selected_channel, emoji.emojize(message, use_aliases=True))
 
     def process_command(self, message: str) -> None:
         parts = message.split(" ")
@@ -332,6 +332,19 @@ class IMDiscord:
             commands[cmd](args)
         else:
             self.current_window.send_message(f"Unknown Command: {cmd}")
+
+    def cmd_login(self, args: List[str]) -> None:
+        self.current_window.send_message("Logging in...")
+
+        for func in [getattr(self, f) for f in dir(self) if callable(getattr(self, f))]:
+            if hasattr(func, "event_name"):
+                self.discord_client.event(func, func.event_name)
+
+        with open("data/self.token") as f:
+            self.discord_client.start(f.read().strip(), bot=False)
+
+    def cmd_logout(self, args: List[str]) -> None:
+        self.discord_client.close()
 
     def cmd_server(self, args: List[str]) -> None:
         if not self.discord_client.logged_in:
@@ -377,19 +390,6 @@ class IMDiscord:
                 self.current_window.send_message("No Results")
             for result in results:
                 self.current_window.send_message(f"({result[0]}): {result[1]}")
-
-    def cmd_login(self, args: List[str]) -> None:
-        self.current_window.send_message("Logging in...")
-
-        for func in [getattr(self, f) for f in dir(self) if callable(getattr(self, f))]:
-            if hasattr(func, "event_name"):
-                self.discord_client.event(func, func.event_name)
-
-        with open("data/self.token") as f:
-            self.discord_client.start(f.read().strip(), bot=False)
-
-    def cmd_logout(self, args: List[str]) -> None:
-        self.discord_client.close()
 
     def discord_ready_callback(self) -> None:
         self.current_window.send_message(f"Logged in as {self.discord_client.client.user.name}")
