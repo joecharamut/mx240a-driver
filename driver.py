@@ -26,28 +26,47 @@ def set_log_level(level: str) -> None:
 set_log_level("INFO")
 
 
-def as_bytes(data: Union[str, bytes]) -> bytes:
-    if isinstance(data, bytes):
-        return data
-    return data.encode("ascii", "replace")
+def as_bytes(string: str) -> bytes:
+    """
+    Convert a string to a bytes object containing ascii data
+
+    :param string: string to encode as ascii
+    :return: ascii bytes of string
+    """
+    if not isinstance(string, str):
+        raise ValueError("string must be a str")
+    return string.encode("ascii", "replace")
 
 
 def to_hex(num: Union[int, bytes]) -> str:
+    """
+    Convert an int or bytes to a hex string representation
+
+    :param num: int or bytes to convert
+    :return: hex string
+    """
     if isinstance(num, int):
         return "%.2x" % num
-    else:
+    elif isinstance(num, bytes):
         out = ""
         for b in num:
             out += "%.2x" % b
         return out
+    else:
+        raise ValueError("num must be one of (int, bytes)")
 
 
-def hexdump(data: Union[List[str], List[int], bytes], show_binary: bool = False) -> str:
-    if isinstance(data, List) and len(data):
-        if isinstance(data[0], str):
-            data = bytes([ord(c) for c in data])
-        if isinstance(data[0], int):
-            data = bytes(data)
+def hexdump(data: bytes, show_binary: bool = False) -> str:
+    """
+    Convert a bytes object to a hexdump-like string
+
+    :param data: the bytes
+    :param show_binary: whether to show binary of data or not
+    :return: a representation of data in the format (hex bytes) [ascii representation] {optional binary}
+    """
+
+    if not isinstance(data, bytes):
+        raise ValueError("data must be a bytes object")
 
     ascii_data = []
     for byte in data:
@@ -102,6 +121,7 @@ class Ringtone:
         "g5#": 0x15,
         "a5": 0x16,
         "a5#": 0x17,
+        # 0x18 - 0x1f missing
         "b5": 0x20,
         "c6": 0x21,
         "c6#": 0x22,
@@ -183,9 +203,8 @@ class Ringtone:
                 logger.warning("RTTTL WARNING: Pauses do not work correctly on the handset")
             output_bytes.append(0x7f if note == "p" else Ringtone.NOTE_TO_HEX[full_note])
 
-        logger.trace(f"RTTTL Output {hexdump(output_bytes)}")
-
         self.tone_bytes = bytes(output_bytes)
+        logger.trace(f"RTTTL Output {hexdump(self.tone_bytes)}")
 
     def __repr__(self) -> str:
         return f"<Ringtone \"{self.tone_data}\">"
@@ -390,6 +409,10 @@ class PacketType(Enum):
     HandsetWarning = 0x0f
     HandsetInvite = 0x10
     HandsetRequestResponse = 0x11
+    BasePoll = 0x12
+    ServiceInfo = 0x13
+    HandheldInfo = 0x14
+    MusicData = 0x15
 
 
 class Packet:
@@ -412,6 +435,15 @@ class Packet:
             return PacketType.BaseInitACK
         elif byte_1 == 0xef:
             return PacketType.BaseInitReply
+        elif byte_1 == 0xad and byte_2 == 0x00:
+            return PacketType.BasePoll
+        elif byte_1_hi == 0xc:
+            if byte_2 == 0xd7:
+                return PacketType.ServiceInfo
+            elif byte_2 == 0xd9:
+                return PacketType.HandheldInfo
+            elif byte_2 == 0xcd:
+                return PacketType.MusicData
         elif byte_1_hi == 0xf or byte_1_hi == 0xe:
             if byte_2 == 0xfd:
                 return PacketType.ACK
