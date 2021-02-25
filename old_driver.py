@@ -617,7 +617,7 @@ class BaseStation:
         while not self.read_loop_flag:
             try:
                 # read 16 bytes
-                data = bytes(self.device.read(16))
+                data = bytes(self.device.read(64))
                 if len(data):
                     logger.trace(f"[RECV] {hexdump(data)}")
 

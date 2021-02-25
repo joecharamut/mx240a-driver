@@ -14,7 +14,7 @@ from discord import Client, ChannelType
 import asyncio
 import emoji
 
-from driver import Window, BaseStation, Handset, Buddy, logger, set_log_level
+from old_driver import Window, BaseStation, Handset, Buddy, logger, set_log_level
 
 
 class PrivateChannelWrapper:
@@ -326,12 +326,24 @@ class IMDiscord:
             "s": self.cmd_server,
             "channel": self.cmd_channel,
             "c": self.cmd_channel,
+            "test": self.cmd_test,
         }
 
         if cmd in commands:
             commands[cmd](args)
         else:
             self.current_window.send_message(f"Unknown Command: {cmd}")
+
+    def cmd_test(self, args: List[str]) -> None:
+        self.current_window = self.handset.new_group()
+        self.current_window.send_message("Welcome to test mode", "TEST")
+
+        def test_fn() -> None:
+            for i in range(0, 128):
+                self.current_window.send_message(f"chr {i}: | {chr(i)} |", f"| {chr(i)} |")
+                time.sleep(1)
+
+        Thread(target=test_fn).start()
 
     def cmd_login(self, args: List[str]) -> None:
         self.current_window.send_message("Logging in...")

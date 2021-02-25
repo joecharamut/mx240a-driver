@@ -1,8 +1,8 @@
 from time import sleep
 from typing import Optional, Dict, Any
 
-import driver
-from driver import Handset, Window, BaseStation, Buddy
+import old_driver as driver
+from old_driver import Handset, Window, BaseStation, Buddy
 
 
 class Echo:
@@ -11,8 +11,8 @@ class Echo:
     current_window: Optional[Window]
 
     def __init__(self) -> None:
-        # driver.set_log_level("TRACE")
-        driver.set_log_level("DEBUG")
+        driver.set_log_level("TRACE")
+        # driver.set_log_level("DEBUG")
 
         self.exit = False
 
