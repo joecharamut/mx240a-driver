@@ -5,15 +5,21 @@ def log(msg: str) -> None:
     mx240a.logger.info(f"[TestService] {msg}")
 
 
+class Manager(mx240a.HandheldManagerService):
+    def register_handheld(self, handheld_id: str) -> bool:
+        log(f"register: handheld {handheld_id}")
+        return True
+
+    def connect_handheld(self, handheld_id: str) -> bool:
+        log(f"connect: handheld {handheld_id}")
+        return True
+
+
 class TestService(mx240a.Service):
     @property
     def service_id(self) -> str:
         # noinspection SpellCheckingInspection
         return "dAscor"
-
-    def register_handheld(self, handheld_id: str) -> bool:
-        log(f"register: handheld {handheld_id}")
-        return True
 
     def handheld_login(self, handheld: mx240a.Handheld) -> bool:
         log(f"login: handheld {handheld.handheld_id} user '{handheld.username}' pass '{handheld.password}'")
