@@ -3,6 +3,8 @@ from .driver import Driver
 from .connection import Service, HandheldManager, HandheldConnectData
 from .rtttl import Ringtone
 
+# todo: remove this?
+# noinspection PyUnresolvedReferences
 from .logging import logger
 
 __all__ = [

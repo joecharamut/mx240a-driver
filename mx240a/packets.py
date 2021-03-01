@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Optional, Dict, Final, Iterator
+from typing import Dict, Final, Iterator
 
 from mx240a.rtttl import Ringtone
 from mx240a.util import hexdump, to_hex, as_bytes

@@ -1,6 +1,7 @@
 import sys
 
 
+# noinspection PyMethodMayBeStatic
 class FallbackLogger:
     # stub
     def remove(self, *args, **kwargs) -> None:
