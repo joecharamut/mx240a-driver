@@ -5,6 +5,12 @@ import mx240a
 
 
 class HandheldConnectData:
+    """
+    Class for the data of a connecting handheld
+
+    handheld_name: the name displayed on / identifying the handheld
+    tones: the ringtones for various events on the handheld
+    """
     handheld_name: str
     tones: "_Ringtones"
 
@@ -53,8 +59,7 @@ class HandheldConnectData:
 
 
 class HandheldManager(ABC):
-    def init(self) -> None:
-        ...
+    """Class to manage handhelds attempting to register and connect"""
 
     @abstractmethod
     def register_handheld(self, handheld_id: str) -> bool:
@@ -70,6 +75,7 @@ class HandheldManager(ABC):
     def connect_handheld(self, handheld_id: str) -> Union[HandheldConnectData, None]:
         """
         Called when a handheld is attempting to connect
+
         Intended for program to check whether the handheld is allowed to connect based on
             registration status and/or other conditions (ex: original driver had time restrictions)
 
@@ -81,14 +87,15 @@ class HandheldManager(ABC):
 
 
 class Service(ABC):
-    def __init__(self) -> None:
-        ...
+    """Class to represent a "chat service" to the handheld"""
 
     @property
     def service_id(self) -> str:
         """
         Service ID of this service
-        Note: The second character must be "A", "a", or "M"
+
+        Note: The second character of the name *must* be "A", "a", or "M"
+        Note: ID should be < 6 characters, the handheld will truncate if over, and this driver will raise an error
 
         :return: the service id
         """
