@@ -62,7 +62,7 @@ class HandheldManager(ABC):
     """Class to manage handhelds attempting to register and connect"""
 
     @abstractmethod
-    def register_handheld(self, handheld_id: str) -> bool:
+    def register(self, handheld_id: str) -> bool:
         """
         Called when a user is attempting to register a new handheld
 
@@ -72,7 +72,7 @@ class HandheldManager(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def connect_handheld(self, handheld_id: str) -> Union[HandheldConnectData, None]:
+    def connect(self, handheld_id: str) -> Union[HandheldConnectData, None]:
         """
         Called when a handheld is attempting to connect
 

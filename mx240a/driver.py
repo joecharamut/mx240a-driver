@@ -84,7 +84,7 @@ class Driver:
         self.num_connections += 1
         self.connections[connection_id] = Handheld(self, connection_id, handheld_id)
 
-        connect_info = self.handheld_manager.connect_handheld(handheld_id)
+        connect_info = self.handheld_manager.connect(handheld_id)
         assert connect_info  # todo: error out on null
         self.base.write(HandheldInfoPacket(connection_id, connect_info.handheld_name))
         self.base.write(ServiceInfoPacket(connection_id, self.service.service_id))

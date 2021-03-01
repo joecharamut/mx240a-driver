@@ -9,11 +9,11 @@ def log(msg: str) -> None:
 
 
 class TestManager(mx240a.HandheldManager):
-    def register_handheld(self, handheld_id: str) -> bool:
+    def register(self, handheld_id: str) -> bool:
         log(f"register: handheld {handheld_id}")
         return True
 
-    def connect_handheld(self, handheld_id: str) -> Union[mx240a.HandheldConnectData, None]:
+    def connect(self, handheld_id: str) -> Union[mx240a.HandheldConnectData, None]:
         log(f"connect: handheld {handheld_id}")
 
         connect_data = mx240a.HandheldConnectData("Handheld#1")
