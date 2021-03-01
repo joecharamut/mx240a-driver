@@ -1,7 +1,7 @@
 from time import monotonic
 from typing import Type, Dict, Callable, TypeVar, Final, Optional
 
-from mx240a.service import Service
+from mx240a.service import Service, HandheldManagerService
 from mx240a.base import Base
 from mx240a.packets import Packet, HandheldConnectingPacket, HandheldDisconnectedPacket, \
     HandheldInfoPacket, ServiceInfoPacket, PollingPacket, RingtonePacket, HandheldUsernamePacket, \
@@ -9,21 +9,20 @@ from mx240a.packets import Packet, HandheldConnectingPacket, HandheldDisconnecte
 from mx240a.logging import logger
 from mx240a.handheld import Handheld
 from mx240a.rtttl import Ringtone
-from mx240a.util import as_bytes
 
-PacketType = TypeVar("PacketType", bound="Packet")
+PacketInstanceType = TypeVar("PacketInstanceType", bound="Packet")
 
 
 class Driver:
     base: Base
-    PACKET_DISPATCH_TABLE: Final[Dict[Type[Packet], Callable[[PacketType], None]]]
+    PACKET_DISPATCH_TABLE: Final[Dict[Type[Packet], Callable[[PacketInstanceType], None]]]
     num_connections: int
     connections: Dict[int, Optional[Handheld]]
     last_time: int
     ping_timer: int
     service: Service
 
-    def __init__(self, service: Service) -> None:
+    def __init__(self, handheld_manager: HandheldManagerService, service: Service) -> None:
         self.base = Base()
         self.PACKET_DISPATCH_TABLE = {
             HandheldConnectingPacket: self.handle_connection_packet,
@@ -44,6 +43,7 @@ class Driver:
         self.last_time = int(monotonic() * 1000)
         self.ping_timer = 0
         self.service = service
+        self.handheld_manager = handheld_manager
 
     def loop(self) -> None:
         try:
@@ -84,38 +84,14 @@ class Driver:
         self.num_connections += 1
         self.connections[connection_id] = Handheld(self, connection_id, handheld_id)
 
-        # todo: check for registration info
-        name = "IMFree"
-        self.base.write(HandheldInfoPacket(connection_id, name))
-        self.base._write(bytes([
-            0xc0 | connection_id,
-            0xd1,
-            *as_bytes(" MSN  "),
-            0xff
-        ]))
+        connect_info = self.handheld_manager.connect_handheld(handheld_id)
+        assert connect_info  # todo: error out on null
+        self.base.write(HandheldInfoPacket(connection_id, connect_info.handheld_name))
         self.base.write(ServiceInfoPacket(connection_id, self.service.service_id))
 
-        return
-
-        # noinspection SpellCheckingInspection
-        tones = {
-            # All these ringtones are copied from the original MX240a driver
-            "newMessage": Ringtone("Dang:d=4,o=5,b=140:16g#5,16e5,16c#5"),  # aol-imrcv.txt
-            "contactOnline": Ringtone("Rikasmiesjos:d=4,o=5,b=100:32b,32d6,32g6,32g6"),  # aol_ring.txt
-            "contactOffline": Ringtone("Bolero:d=4,o=5,b=80:c6"),  # bolero.txt
-            "messageSent": Ringtone("Dang:d=4,o=5,b=140:16b5,16e5,16g#5"),  # aol-imsend.txt
-            "serviceDisconnected": Ringtone("Dang:d=16,o=6,b=200:c,e,d7,c,e,a#,c,e"),  # aol_urgent.txt
-            "serviceConnected": Ringtone("Bulletme:d=4,o=5,b=112:b.5,g.5"),  # bulletme.txt
-            "outOfRange": Ringtone("Dang:d=4,o=5,b=140:4c,8g,8g,8a,4g,2b,c"),  # aol-outofrange.txt
-            "backInRange": Ringtone("Dang:d=32,o=7,b=180:d#,e,g,d#,g,d#,f#,e"),  # aol_in_range.txt
-            "enterSleepMode": Ringtone("Dang:d=4,o=5,b=80:8e,8c,4f,4e,4d,4c"),  # aol_sleep.txt
-        }
-
-        mute_tone = Ringtone(None)
-        for tone_name, tone in tones.items():
-            if not tone:
-                tone = mute_tone
-            self.base.write(RingtonePacket(connection_id, tone_name, tone))
+        mute = Ringtone(None)
+        for tone_name, tone in connect_info.tones.as_dict().items():
+            self.base.write(RingtonePacket(connection_id, tone_name, tone if tone else mute))
 
     def handle_disconnect_packet(self, packet: HandheldDisconnectedPacket) -> None:
         connection_id = packet.connection_id

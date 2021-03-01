@@ -235,10 +235,10 @@ class ServiceInfoPacket(TxPacket):
     def __init__(self, connection_id: int, service_name: str) -> None:
         if connection_id > 7 or connection_id < 1:
             raise ValueError("Invalid connection_id")
-        # if len(service_name) > 6:
-        #     raise ValueError("Invalid service_name: too long")
+        if len(service_name) > 6:
+            raise ValueError("Invalid service_name: too long")
         if service_name[1] not in ["A", "a", "M"]:  # AOL, Yahoo, MSN -- handheld uses 2nd char to determine service
-            raise ValueError("Invalid service_name: missing magic second character")
+            raise ValueError("Invalid service_name: second character not 'A', 'a', or 'M'")
 
         self.connection_id = connection_id
         self.service_name = service_name
@@ -284,15 +284,15 @@ class RingtonePacket(TxPacket):
     tone: Ringtone
 
     TONE_NAME_TO_ID: Final[Dict[str, int]] = {
-        "newMessage": 0x02,
-        "contactOnline": 0x03,
-        "contactOffline": 0x04,
-        "messageSent": 0x05,
-        "serviceDisconnected": 0x06,
-        "serviceConnected": 0x07,
-        "outOfRange": 0x08,
-        "backInRange": 0x09,
-        "enterSleepMode": 0x0a,
+        "new_message": 0x02,
+        "contact_online": 0x03,
+        "contact_offline": 0x04,
+        "message_sent": 0x05,
+        "service_disconnected": 0x06,
+        "service_connected": 0x07,
+        "out_of_range": 0x08,
+        "return_to_in_range": 0x09,
+        "enter_sleep_mode": 0x0a,
     }
 
     def __init__(self, connection_id: int, tone_id: str, tone: Ringtone) -> None:
