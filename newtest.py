@@ -8,7 +8,7 @@ def log(msg: str) -> None:
     mx240a.logger.info(f"[TestService] {msg}")
 
 
-class TestManager(mx240a.HandheldManagerService):
+class TestManager(mx240a.HandheldManager):
     def register_handheld(self, handheld_id: str) -> bool:
         log(f"register: handheld {handheld_id}")
         return True

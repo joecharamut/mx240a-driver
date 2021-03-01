@@ -52,7 +52,7 @@ class HandheldConnectData:
         self.tones = self._Ringtones()
 
 
-class HandheldManagerService(ABC):
+class HandheldManager(ABC):
     def init(self) -> None:
         ...
 

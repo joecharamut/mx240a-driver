@@ -1,7 +1,7 @@
 from time import monotonic
 from typing import Type, Dict, Callable, TypeVar, Final, Optional
 
-from mx240a.service import Service, HandheldManagerService
+from mx240a.connection import Service, HandheldManager
 from mx240a.base import Base
 from mx240a.packets import Packet, HandheldConnectingPacket, HandheldDisconnectedPacket, \
     HandheldInfoPacket, ServiceInfoPacket, PollingPacket, RingtonePacket, HandheldUsernamePacket, \
@@ -22,7 +22,7 @@ class Driver:
     ping_timer: int
     service: Service
 
-    def __init__(self, handheld_manager: HandheldManagerService, service: Service) -> None:
+    def __init__(self, handheld_manager: HandheldManager, service: Service) -> None:
         self.base = Base()
         self.PACKET_DISPATCH_TABLE = {
             HandheldConnectingPacket: self.handle_connection_packet,
