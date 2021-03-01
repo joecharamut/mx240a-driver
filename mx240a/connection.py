@@ -102,7 +102,7 @@ class Service(ABC):
         return " AIM  "
 
     @abstractmethod
-    def handheld_login(self, handheld: mx240a.Handheld) -> bool:
+    def login(self, handheld: mx240a.Handheld) -> bool:
         """
         Called when a handheld attempts to login
 

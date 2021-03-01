@@ -38,7 +38,7 @@ class TestService(mx240a.Service):
         # noinspection SpellCheckingInspection
         return "AAAAAA"
 
-    def handheld_login(self, handheld: mx240a.Handheld) -> bool:
+    def login(self, handheld: mx240a.Handheld) -> bool:
         log(f"login: handheld {handheld.handheld_id} user '{handheld.username}' pass '{handheld.password}'")
         return True
 

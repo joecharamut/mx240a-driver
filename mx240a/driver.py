@@ -114,7 +114,7 @@ class Driver:
         if handheld:
             handheld.password = packet.password
 
-        if self.service.handheld_login(handheld):
+        if self.service.login(handheld):
             self.base.write(LoginSuccessPacket(connection_id))
         else:
             self.base.write(ErrorPacket(connection_id, ErrorPacket.ErrorType.ServiceTemporarilyUnavailable))
