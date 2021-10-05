@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Union, Optional, Dict
+from typing import Optional, Dict
 
 import mx240a
 
@@ -72,7 +72,7 @@ class HandheldManager(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def connect(self, handheld_id: str) -> Union[HandheldConnectData, None]:
+    def connect(self, handheld_id: str) -> Optional[HandheldConnectData]:
         """
         Called when a handheld is attempting to connect
 

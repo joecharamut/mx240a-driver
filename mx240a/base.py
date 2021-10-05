@@ -1,12 +1,14 @@
 from threading import Lock, Thread, Event
-from time import sleep
+from time import sleep, time
 from typing import Optional
+from queue import Queue
 
 # noinspection PyPep8Naming
 from hid import device as HIDDevice
 
+import mx240a.packets
 from mx240a.logging import logger
-from mx240a.util import to_hex, hexdump
+from mx240a.util import hexdump
 from mx240a.packets import Packet, BaseInitPacket, BaseShutdownPacket, BaseInitReplyPacket
 
 
@@ -14,11 +16,15 @@ class Base:
     write_lock: Lock
     read_lock: Lock
     device: Optional[HIDDevice]
+    write_queue: Queue
+    last_ack_time: float
 
     def __init__(self) -> None:
         self.device = None
         self.write_lock = Lock()
         self.read_lock = Lock()
+        self.write_queue = Queue()
+        self.last_ack_time = 0
 
         self._open()
 
@@ -131,8 +137,22 @@ class Base:
                 logger.trace(f"[SEND] {hexdump(part)}")
                 self.device.write(part)
                 # todo test how much to delay
-                sleep(0.15)
+                #sleep(0.15)
 
     def write(self, packet: Packet) -> None:
-        for data in packet.encode():
-            self._write(data)
+        if isinstance(packet, mx240a.packets.ImmediateTxPacket):
+            for data in packet.encode():
+                self._write(data)
+
+            if isinstance(packet, mx240a.packets.PollingPacket):
+                while not self.write_queue.empty():
+                    delta = time() - self.last_ack_time
+                    if delta > 0.5:
+                        sleep(0.15)
+                    for data in self.write_queue.get().encode():
+                        self._write(data)
+        else:
+            self.write_queue.put(packet)
+
+    def ack(self, packet) -> None:
+        self.last_ack_time = time()

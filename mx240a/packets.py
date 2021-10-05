@@ -67,10 +67,12 @@ class Packet(ABC):
         return UnknownPacket(raw_data)
 
 
-class TxPacket(Packet):
-    @abstractmethod
-    def encode(self) -> Iterator[bytes]:
-        raise NotImplementedError
+class TxPacket(Packet, ABC):
+    pass
+
+
+class ImmediateTxPacket(TxPacket, ABC):
+    pass
 
 
 class RxPacket(Packet):
@@ -204,7 +206,7 @@ class MessagePacket(UnknownPacket):
 
 
 # Tx Packets Begin Here
-class BaseInitPacket(TxPacket):
+class BaseInitPacket(ImmediateTxPacket):
     def encode(self) -> Iterator[bytes]:
         yield bytes([0xad, 0xef, 0x8d, 0xff])
 
@@ -212,15 +214,15 @@ class BaseInitPacket(TxPacket):
         return "<BaseInitPacket>"
 
 
-class BaseShutdownPacket(TxPacket):
+class BaseShutdownPacket(ImmediateTxPacket):
     def encode(self) -> Iterator[bytes]:
         yield bytes([0xef, 0x8d, 0xff])
 
     def __repr__(self) -> str:
-        return "<BaseInitPacket>"
+        return "<BaseShutdownPacket>"
 
 
-class PollingPacket(TxPacket):
+class PollingPacket(ImmediateTxPacket):
     def encode(self) -> Iterator[bytes]:
         yield bytes([0xad])
 

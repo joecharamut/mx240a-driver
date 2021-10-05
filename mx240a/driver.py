@@ -5,7 +5,7 @@ from mx240a.connection import Service, HandheldManager
 from mx240a.base import Base
 from mx240a.packets import Packet, HandheldConnectingPacket, HandheldDisconnectedPacket, \
     HandheldInfoPacket, ServiceInfoPacket, PollingPacket, RingtonePacket, HandheldUsernamePacket, \
-    HandheldPasswordPacket, ErrorPacket, LoginSuccessPacket
+    HandheldPasswordPacket, ErrorPacket, LoginSuccessPacket, ACKPacket
 from mx240a.logging import logger
 from mx240a.handheld import Handheld
 from mx240a.rtttl import Ringtone
@@ -29,6 +29,7 @@ class Driver:
             HandheldDisconnectedPacket: self.handle_disconnect_packet,
             HandheldUsernamePacket: self.handle_username_packet,
             HandheldPasswordPacket: self.handle_password_packet,
+            ACKPacket: self.handle_ack_packet,
         }
         self.num_connections = 0
         self.connections = {
@@ -118,3 +119,6 @@ class Driver:
             self.base.write(LoginSuccessPacket(connection_id))
         else:
             self.base.write(ErrorPacket(connection_id, ErrorPacket.ErrorType.ServiceTemporarilyUnavailable))
+
+    def handle_ack_packet(self, packet: ACKPacket) -> None:
+        self.base.ack(packet)
