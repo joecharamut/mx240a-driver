@@ -96,7 +96,13 @@ class Base:
 
     def _read(self) -> Optional[Packet]:
         with self.read_lock:
-            data = bytes(self.device.read(-1))
+            try:
+                # 255 bytes max, 1 second timeout
+                data = bytes(self.device.read(255, 1000))
+            except OSError as e:
+                logger.warning(e)
+                data = bytes()
+                pass
             if len(data):
                 while 0xff not in data and 0xfe not in data:
                     data += bytes(self.device.read(-1))
