@@ -1,7 +1,8 @@
+from .rtttl import Ringtone
 from .handheld import Handheld
 from .driver import Driver
 from .connection import Service, HandheldManager, HandheldConnectData
-from .rtttl import Ringtone
+
 
 # todo: remove this?
 # noinspection PyUnresolvedReferences

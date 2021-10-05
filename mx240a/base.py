@@ -31,10 +31,10 @@ class Base:
             device.open(vendor_id, product_id)
             mfr = device.get_manufacturer_string()
             prd = device.get_product_string()
-            ser = device.get_serial_number_string().encode()
-            if mfr == "Giant Wireless Technology" and prd == "MX240a MOTOROLA MESSENGER" and ser == b"\xd0\x89":
+            if mfr == "Giant Wireless Technology" and prd == "MX240a MOTOROLA MESSENGER":
                 return True
-        except IOError:
+        except IOError as e:
+            logger.error(e)
             pass
 
         return False
@@ -72,7 +72,6 @@ class Base:
 
         logger.debug(f"mfr: {self.device.get_manufacturer_string()}")
         logger.debug(f"prd: {self.device.get_product_string()}")
-        logger.debug(f"ser: {to_hex(self.device.get_serial_number_string().encode())}")
 
         logger.debug("Initializing base")
         retries = 0
@@ -85,6 +84,7 @@ class Base:
                 break
         else:
             raise RuntimeError("Failed to initialize base")
+        logger.debug("Init success")
 
     def _close(self) -> None:
         logger.info("Base shutting down")
@@ -112,6 +112,8 @@ class Base:
 
     def _write(self, data: bytes) -> None:
         with self.write_lock:
+            # windows requires an extra 0x00 before the packet for unknowable reasons
+            data = b"\x00" + data
             parts = [
                 # pad to 8 bytes
                 data[i:i + 8].ljust(8, b"\0")
