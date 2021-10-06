@@ -2,6 +2,7 @@ from threading import Lock, Thread, Event
 from time import sleep, time
 from typing import Optional
 from queue import Queue
+import platform
 
 # noinspection PyPep8Naming
 from hid import device as HIDDevice
@@ -18,6 +19,7 @@ class Base:
     device: Optional[HIDDevice]
     write_queue: Queue
     last_ack_time: float
+    is_windows: bool
 
     def __init__(self) -> None:
         self.device = None
@@ -25,6 +27,7 @@ class Base:
         self.read_lock = Lock()
         self.write_queue = Queue()
         self.last_ack_time = 0
+        self.is_windows = platform.system() == "Windows"
 
         self._open()
 
@@ -108,7 +111,6 @@ class Base:
             except OSError as e:
                 logger.warning(e)
                 data = bytes()
-                pass
             if len(data):
                 while 0xff not in data and 0xfe not in data:
                     read_data = self.device.read(-1)
@@ -129,7 +131,8 @@ class Base:
     def _write(self, data: bytes) -> None:
         with self.write_lock:
             # windows requires an extra 0x00 before the packet for unknowable reasons
-            data = b"\x00" + data
+            if self.is_windows:
+                data = b"\x00" + data
             parts = [
                 # pad to 8 bytes
                 data[i:i + 8].ljust(8, b"\0")
