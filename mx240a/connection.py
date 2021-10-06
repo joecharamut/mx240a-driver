@@ -111,3 +111,17 @@ class Service(ABC):
         """
         # todo: return login error instead of bool
         raise NotImplementedError
+
+    @abstractmethod
+    def logout(self) -> None:
+        ...
+
+    @abstractmethod
+    def ready(self, handheld: mx240a.Handheld) -> None:
+        """
+        Called when the handheld is ready to start doing things
+
+        :param handheld: the handheld
+        :return: None
+        """
+        raise NotImplementedError

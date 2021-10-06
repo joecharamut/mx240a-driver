@@ -1,5 +1,5 @@
 from .rtttl import Ringtone
-from .handheld import Handheld
+from .handheld import Handheld, Buddy
 from .driver import Driver
 from .connection import Service, HandheldManager, HandheldConnectData
 
@@ -9,7 +9,7 @@ from .connection import Service, HandheldManager, HandheldConnectData
 from .logging import logger
 
 __all__ = [
-    "Handheld",
+    "Handheld", "Buddy",
     "Driver",
     "Service", "HandheldManager", "HandheldConnectData",
     "Ringtone",

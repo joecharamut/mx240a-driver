@@ -111,7 +111,11 @@ class Base:
                 pass
             if len(data):
                 while 0xff not in data and 0xfe not in data:
-                    data += bytes(self.device.read(-1))
+                    read_data = self.device.read(-1)
+                    if read_data:
+                        data += bytes(read_data)
+                    else:
+                        break
                 # todo: check if this breaks anything
                 data = data.split(b"\xff")[0]
                 logger.trace(f"[RECV] {hexdump(data)}")
@@ -132,12 +136,11 @@ class Base:
                 for i in range(0, len(data), 8)
             ]
 
-            # write and count amount written
             for part in parts:
                 logger.trace(f"[SEND] {hexdump(part)}")
                 self.device.write(part)
-                # todo test how much to delay
-                #sleep(0.15)
+            # todo test how much to delay
+            # sleep(0.05)
 
     def write(self, packet: Packet) -> None:
         if isinstance(packet, mx240a.packets.ImmediateTxPacket):

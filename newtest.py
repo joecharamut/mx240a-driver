@@ -42,6 +42,15 @@ class TestService(mx240a.Service):
         log(f"login: handheld {handheld.handheld_id} user '{handheld.username}' pass '{handheld.password}'")
         return True
 
+    def logout(self) -> None:
+        ...
+
+    def ready(self, handheld: mx240a.Handheld) -> None:
+        handheld.add_buddy(mx240a.Buddy("Echo"))
+        handheld.add_buddy(mx240a.Buddy("Test1"))
+        handheld.add_buddy(mx240a.Buddy("Test2"))
+        handheld.add_buddy(mx240a.Buddy("Test3"))
+
 
 if __name__ == "__main__":
     driver = mx240a.Driver(TestManager(), TestService())

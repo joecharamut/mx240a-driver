@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Dict, Final, Iterator
 
+from mx240a.handheld import Buddy
 from mx240a.rtttl import Ringtone
 from mx240a.util import hexdump, to_hex, as_bytes
 
@@ -25,7 +26,7 @@ class Packet(ABC):
         byte_2_lo = (byte_2 & 0x0f)
 
         if byte_1 == 0xe0:
-            return HandsetRegistrationPacket(raw_data)
+            return HandheldRegistrationPacket(raw_data)
         elif (byte_1 == 0xe1 or byte_1 == 0xe2) and byte_2 == 0xfd:
             return MysteryACKPacket(raw_data)
         # elif byte_1 == 0xe8:
@@ -88,7 +89,7 @@ class UnknownPacket(RxPacket):
         return f"<{self.__class__.__name__} {hexdump(self.raw_data)}>"
 
 
-class HandsetRegistrationPacket(RxPacket):
+class HandheldRegistrationPacket(RxPacket):
     handset_id: str
 
     def __init__(self, raw_data) -> None:
@@ -96,7 +97,7 @@ class HandsetRegistrationPacket(RxPacket):
         self.handset_id = "".join([to_hex(b) for b in handset_id_bytes])
 
     def __repr__(self) -> str:
-        return f"<HandsetRegistrationPacket id: {self.handset_id}>"
+        return f"<HandheldRegistrationPacket id: {self.handset_id}>"
 
 
 class MysteryACKPacket(UnknownPacket):
@@ -177,12 +178,26 @@ class HandheldPasswordPacket(RxPacket):
         return f"<HandheldPasswordPacket password: \"{self.password}\", connection: {self.connection_id}>"
 
 
-class OpenWindowPacket(UnknownPacket):
-    pass
+class OpenWindowPacket(RxPacket):
+    connection_id: int
+    window_id: int
+
+    def __init__(self, raw_data) -> None:
+        self.connection_id = raw_data[0] & 0xf
+        self.window_id = raw_data[2]
+
+    def __repr__(self) -> str:
+        return f"<OpenWindowPacket window: {self.window_id}, connection: {self.connection_id}>"
 
 
-class CloseWindowPacket(UnknownPacket):
-    pass
+class CloseWindowPacket(RxPacket):
+    connection_id: int
+
+    def __init__(self, raw_data) -> None:
+        self.connection_id = raw_data[0] & 0xf
+
+    def __repr__(self) -> str:
+        return f"<CloseWindowPacket connection: {self.connection_id}>"
 
 
 class HandsetAwayPacket(UnknownPacket):
@@ -305,6 +320,11 @@ class RingtonePacket(TxPacket):
         except KeyError:
             raise ValueError("Invalid tone_id")
 
+        try:
+            assert isinstance(tone, Ringtone)
+        except AssertionError:
+            print(tone.__class__, tone)
+
         self.tone = tone
 
     def encode(self) -> Iterator[bytes]:
@@ -374,3 +394,44 @@ class ErrorPacket(TxPacket):
 
     def __repr__(self) -> str:
         return f"<ErrorPacket connection id: {self.connection_id} errno: {self.errno.name}>"
+
+
+class HandheldRegistrationReplyPacket(TxPacket):
+    def __init__(self, success: bool) -> None:
+        self.success = success
+
+    def encode(self) -> Iterator[bytes]:
+        if self.success:
+            yield bytes([0xee, 0xd3])
+        else:
+            yield bytes([0xee, 0xc5])
+
+
+class BuddyStatusPacket(TxPacket):
+    def __init__(self, connection_id: int, buddy: Buddy) -> None:
+        self.connection_id = connection_id
+        self.buddy = buddy
+
+    def encode(self) -> Iterator[bytes]:
+        yield bytes([
+            0xe0 | self.connection_id,
+            0xca,
+            *as_bytes(self.buddy.status),
+            self.buddy.buddy_id,
+            0xff,
+        ])
+
+
+class BuddyInfoPacket(TxPacket):
+    def __init__(self, connection_id: int, buddy: Buddy) -> None:
+        self.connection_id = connection_id
+        self.buddy = buddy
+
+    def encode(self) -> Iterator[bytes]:
+        yield bytes([
+            0xc0 | self.connection_id,
+            0xc9,
+            *as_bytes(self.buddy.group),
+            *as_bytes(self.buddy.name),
+            0xff,
+        ])
